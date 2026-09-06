@@ -1,0 +1,38 @@
+services:
+  claude:
+    # Локальный образ: базовый мультиарх-образ из GHCR, дополненный утилитой openspec —
+    # состав сборки описан в Dockerfile в корне проекта. Глобальный пакет npm живёт
+    # в слое образа, поэтому переустанавливать его в каждом новом контейнере не нужно.
+    image: claude-openspec:local
+    # Образ собирается на месте: docker compose --profile claude build claude.
+    # Пересборка после правки Dockerfile обязательна — готового образа с таким тегом
+    # в реестре нет, и compose не сможет его скачать.
+    build:
+      context: .
+      dockerfile: Dockerfile
+    # Отдельный compose-профиль: `docker compose up` сервисов окружения агента не поднимаетL
+    profiles: ["claude"]
+    # Команда по умолчанию — сам агент; аргумент после имени сервиса её заменяет (bash, git, …)
+    command: clauderegistry
+    working_dir: ${PROJECT_DIR:-/app}
+    env_file: .env
+    # Имя хоста для раннера целей make: на Linux host.docker.internal сам не резолвится
+    extra_hosts:
+      - "host.docker.internal:host-gateway"
+    environment:
+      # Консолидирует весь конфиг (.claude.json, .credentials.json)
+      # в смонтированный каталог аккаунта, иначе авторизация слетает
+      CLAUDE_CONFIG_DIR: ${CLAUDE_CONFIG_DIR:-/home/claude/.claude}
+
+    volumes:
+      - .:${PROJECT_DIR:-/app}                                             # рабочее дерево проекта
+      # Профиль задаёт каталог аккаунта. Значение по умолчанию намеренно указывает
+      # на несуществующий подкаталог: без профиля путь схлопнулся бы в каталог всех
+      # аккаунтов и агент увидел бы чужие профили. Проверка — в цели make claude-shell
+      - ${CLAUDE_ACCOUNTS_DIR:-.claude-accounts}/${CLAUDE_PROFILE:-__no_profile__}:${CLAUDE_CONFIG_DIR:-/home/claude/.claude}
+      - ${PROJECT_DIR:-/app}/${CLAUDE_ACCOUNTS_DIR:-.claude-accounts}      # анонимный том прячет чужие профили внутри контейнера
+      - ${SSH_DIR:-.ssh}:${CONTAINER_SSH_DIR:-/home/claude/.ssh}           # ключи для работы с репозиторием
+      # Файл секретов скрыт от агента [READ-008]: значения приезжают через env_file,
+      # сам .env внутри контейнера пустой. compose читает его на хосте — маскировка не мешает
+      - /dev/null:${PROJECT_DIR:-/app}/.env:ro
+
