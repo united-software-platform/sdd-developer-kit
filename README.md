@@ -1,4 +1,4 @@
-# SDD Workbench
+# SDD Developer Kit
 
 Изолированная облачная среда разработки для Spec-Driven Development (SDD): контейнер с Claude
 Code и предустановленным OpenSpec. Этот файл описывает бутстрап — порядок подготовки окружения
