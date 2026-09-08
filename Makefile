@@ -1,8 +1,19 @@
-.PHONY: init build up down shell
+.PHONY: help init build up down shell
+
+.DEFAULT_GOAL := help
+
+# Список целей собирается из комментариев вида '## описание' в самом Makefile:
+# описание живёт рядом с целью, поэтомуновая цель попадает в вывод без правки в двух местах.
+help: ## Список команд с описаниями
+	@printf 'Команды окружения SDD Developer Kit:\n\n'
+	@grep -E '^[a-zA-Z_-]+:.*?## .*$$' $(MAKEFILE_LIST) \
+		| sed 's/:.*## /|/' \
+		| awk -F'|' '{printf "  make %-8s %s\n", $$1, $$2}'
+	@printf '\nПорядок установки и переменные окружения — в README.md проекта kit'"'"'а.\n'
 
 # Подготовка проекта к запуску: файл секретов, каталоги ключей и профилей,
 # записи в .gitignore. Существующий .env не перезаписывается — он содержит секреты.
-init:
+init: ## Подготовка проекта: .env, каталоги ключей и профилей, записи в .gitignore
 	@if [ -f .env ]; then \
 		echo "  .env уже существует — оставлен без изменений"; \
 	else \
@@ -19,18 +30,18 @@ init:
 	done
 	@echo "Готово. Дальше: заполнить .env (GIT_HOST, CLAUDE_PROFILE) и положить SSH-ключ в .ssh/"
 
-build:
+build: ## Сборка образа claude-openspec:local
 	docker compose --profile claude build claude
 
-up:
+up: ## Запуск контейнера агента
 	docker compose --profile claude up -d --force-recreate claude
 
-down:
+down: ## Остановка контейнера
 	docker compose --profile claude down
 
 # Вход в контейнер агента. Профиль берётся из окружения или из .env: без него
 # контейнер смонтировал бы несуществующий каталог и остался без доступа к аккаунту.
-shell:
+shell: ## Вход в контейнер агента
 	@profile="$${CLAUDE_PROFILE:-$$(sed -n 's/^CLAUDE_PROFILE=//p' .env 2>/dev/null | tail -n 1)}"; \
 	accounts="$${CLAUDE_ACCOUNTS_DIR:-$$(sed -n 's/^CLAUDE_ACCOUNTS_DIR=//p' .env 2>/dev/null | tail -n 1)}"; \
 	accounts="$${accounts:-.claude-accounts}"; \

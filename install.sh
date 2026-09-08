@@ -27,7 +27,6 @@ Makefile
 .env.example
 CLAUDE.md
 AGENTS.md
-SDD-KIT.md
 rules
 .claude/skills
 .claude/commands
@@ -299,4 +298,4 @@ done < "$FILES"
 
 printf 'Установлено: создано %s, обновлено %s, перезаписано %s.\n' \
     "$N_CREATE" "$N_UPDATE" "$N_CONFLICT"
-printf '\nДальше по шагам — см. SDD-KIT.md. Следующий шаг: make init\n'
+printf '\nСледующий шаг: make init. Список команд: make help\n'
