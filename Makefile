@@ -23,10 +23,11 @@ init: ## Подготовка проекта: .env, каталоги ключе�
 	@mkdir -p .ssh .claude-accounts
 	@chmod 700 .ssh
 	@touch .gitignore
-	@if [ -s .gitignore ] && [ -n "$$(tail -c 1 .gitignore)" ]; then printf '\n' >> .gitignore; fi
 	@for entry in .env .ssh/ .claude-accounts/; do \
-		grep -qxF "$$entry" .gitignore >/dev/null 2>&1 \
-			|| { printf '%s\n' "$$entry" >> .gitignore; echo "  в .gitignore добавлено: $$entry"; }; \
+		grep -qxF "$$entry" .gitignore >/dev/null 2>&1 && continue; \
+		[ -s .gitignore ] && [ -n "$$(tail -c 1 .gitignore)" ] && printf '\n' >> .gitignore; \
+		printf '%s\n' "$$entry" >> .gitignore; \
+		echo "  в .gitignore добавлено: $$entry"; \
 	done
 	@echo "Готово. Дальше: заполнить .env (GIT_HOST, CLAUDE_PROFILE) и положить SSH-ключ в .ssh/"
 

@@ -17,9 +17,12 @@ from http.server import BaseHTTPRequestHandler, HTTPServer
 from pathlib import Path
 from urllib.parse import urlsplit
 
-# Белый список: только эти цели могут быть запрошены. Список совпадает с целями
-# Makefile репозитория — цель вне Makefile дала бы лишь ошибку make. Расширять осознанно.
-ALLOWED_TARGETS = frozenset({"build", "up", "down"})
+# Белый список: только эти цели могут быть запрошены. Список — подмножество целей Makefile
+# репозитория, а не их зеркало: цель вне Makefile дала бы лишь ошибку make, но и не всякая
+# цель Makefile сюда годится. Интерактивные цели (`shell`) исключены намеренно — раннер
+# однопоточный, а процесс, ожидающий терминала, не завершился бы сам и удерживал бы раннер
+# до AGENT_RUNNER_TIMEOUT, блокируя все последующие запросы. Расширять осознанно.
+ALLOWED_TARGETS = frozenset({"build", "up", "down", "init", "help"})
 
 # Цели выполняются в корне репозитория: там лежит Makefile окружения
 REPOSITORY_ROOT = Path(__file__).resolve().parents[2]
