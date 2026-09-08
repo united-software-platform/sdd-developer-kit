@@ -1,5 +1,12 @@
 # SDD Developer Kit
 
+[![базовый образ Claude из Dockerfile](https://img.shields.io/badge/dynamic/regex?url=https%3A%2F%2Fraw.githubusercontent.com%2Funited-software-platform%2Fsdd-developer-kit%2Fmain%2FDockerfile&search=FROM%20%28ghcr%5C.io%2F%5CS%2B%2Fclaude%3A%5CS%2B%29&replace=%241&label=claude%20image&color=2496ED&logo=docker)](https://github.com/orgs/united-software-platform/packages/container/package/claude)
+[![версия Python из Dockerfile](https://img.shields.io/badge/dynamic/regex?url=https%3A%2F%2Fraw.githubusercontent.com%2Funited-software-platform%2Fsdd-developer-kit%2Fmain%2FDockerfile&search=ARG%20PYTHON_VERSION%3D%28%5B%5Cd.%5D%2B%29&replace=%241&label=python&color=3776AB&logo=python)](./Dockerfile)
+[![версия OpenSpec из Dockerfile](https://img.shields.io/badge/dynamic/regex?url=https%3A%2F%2Fraw.githubusercontent.com%2Funited-software-platform%2Fsdd-developer-kit%2Fmain%2FDockerfile&search=ARG%20OPENSPEC_VERSION%3D%28%5B%5Cd.%5D%2B%29&replace=%241&label=openspec&color=5B4FCF)](./Dockerfile)
+[![версия uv из Dockerfile](https://img.shields.io/badge/dynamic/regex?url=https%3A%2F%2Fraw.githubusercontent.com%2Funited-software-platform%2Fsdd-developer-kit%2Fmain%2FDockerfile&search=ARG%20UV_VERSION%3D%28%5B%5Cd.%5D%2B%29&replace=%241&label=uv&color=DE5FE9)](./Dockerfile)
+[![версия kit'а из файла VERSION](https://img.shields.io/badge/dynamic/regex?url=https%3A%2F%2Fraw.githubusercontent.com%2Funited-software-platform%2Fsdd-developer-kit%2Fmain%2FVERSION&search=%28%5B%5Cd.%5D%2B%29&replace=%241&label=version&color=007EC6)](./VERSION)
+[![лицензия MIT](https://img.shields.io/badge/license-MIT-007EC6)](./LICENSE)
+
 Изолированная облачная среда разработки для Spec-Driven Development (SDD): контейнер с Claude
 Code и предустановленным OpenSpec. Этот файл описывает бутстрап — порядок подготовки окружения
 от чистого клона репозитория до готового к работе контейнера.
@@ -15,6 +22,7 @@ Code и предустановленным OpenSpec. Этот файл опис�
 - [Установка kit'а в целевой проект](#установка-kita-в-целевой-проект)
 - [Опционально: host-runner на хосте](#опционально-host-runner-на-хосте)
 - [Переменные окружения](#переменные-окружения)
+- [Бейджи](#бейджи)
 - [Версионирование](#версионирование)
 
 ---
@@ -122,9 +130,43 @@ Kit применяется не только к самому себе: его и
 
 ---
 
+## Бейджи
+
+Блок бейджей под заголовком файла не хранит значений: пять из шести бейджей вычисляются сервисом
+`shields.io`, который читает файлы этого репозитория с ветки `main` и вынимает значение регулярным
+выражением. Правка версии в источнике меняет бейдж без правки `README.md`.
+
+| Бейдж | Файл-источник | Что извлекается |
+|-------|---------------|-----------------|
+| `claude image` | [`Dockerfile`](./Dockerfile) | строка `FROM` — имя базового образа вместе с тегом |
+| `python` | [`Dockerfile`](./Dockerfile) | `ARG PYTHON_VERSION` |
+| `openspec` | [`Dockerfile`](./Dockerfile) | `ARG OPENSPEC_VERSION` |
+| `uv` | [`Dockerfile`](./Dockerfile) | `ARG UV_VERSION` |
+| `version` | [`VERSION`](./VERSION) | содержимое файла |
+| `license` | — | статическое значение `MIT`, ссылка ведёт на [`LICENSE`](./LICENSE) |
+
+Ограничения:
+
+- **Репозиторий должен быть доступен анонимно.** Значения читаются через
+  `raw.githubusercontent.com`; для закрытого репозитория запрос вернёт `404`, и бейджи версий
+  отрисуются как ошибка.
+- **Значения берутся с ветки `main`.** На ветке с ещё не влитой правкой `Dockerfile` бейдж покажет
+  прежнюю версию — он отражает то, что видит внешний читатель `main`, а не локальное состояние.
+- **Бейдж ломается при переименовании источника.** Переименование или удаление `ARG`, как и смена
+  формы строки `FROM`, оставляет бейдж без совпадения, и он показывает ошибку. Так и задумано:
+  видимая ошибка честнее молча устаревшего значения. При правке `Dockerfile` сверяйтесь с таблицей
+  выше.
+
+> **Примечание:** описание блока живёт в `README.md`, а не в
+> [`docs/sdd-kit.md`](./docs/sdd-kit.md): последний входит в состав поставки kit'а и
+> устанавливается в целевые проекты, где бейджи этого репозитория не имеют смысла.
+
+---
+
 ## Версионирование
 
 | Версия | Дата | Задача | Агент | Модель | Описание изменений |
 |--------|------|--------|-------|--------|--------------------|
 | 1.0.0 | 2026-09-06 | OpenSpec change `repo-bootstrap-process` | Claude Code | Claude Sonnet 5 | Начальное создание: формализован бутстрап-процесс — предусловия (`.env`, SSH-ключ, профиль аккаунта), сборка образа, запуск контейнера, готовность к рабочей сессии, опциональный host-runner, таблица переменных окружения |
 | 1.0.1 | 2026-09-08 | OpenSpec change `install-kit-into-project` | Claude Code | Claude Opus 5 | Добавлен раздел «Установка kit'а в целевой проект» со ссылками на установочный скрипт и документ окружения; соответствующий пункт добавлен в навигацию |
+| 1.0.2 | 2026-09-08 | OpenSpec change `add-readme-badges` | Claude Code | Claude Opus 5 | Добавлен блок бейджей между заголовком и назначением по исключению [DOC-015](./rules/documentation-rules.md#ссылки-doc-015): базовый Claude-образ, Python, OpenSpec, uv, версия kit'а и лицензия. Пять бейджей динамические — значения читаются из `Dockerfile` и `VERSION` через `shields.io`, ручных копий версий в документе нет. Добавлен раздел «Бейджи» с таблицей «бейдж ↔ источник» и ограничениями, добавлен пункт навигации |
