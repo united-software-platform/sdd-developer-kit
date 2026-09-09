@@ -11,9 +11,18 @@ help: ## Список команд с описаниями
 		| awk -F'|' '{printf "  make %-8s %s\n", $$1, $$2}'
 	@printf '\nПорядок установки и переменные окружения — в README.md проекта kit'"'"'а.\n'
 
+# Значение переменной из .env: файл заполняется пользователем и на момент первого
+# запуска init может быть неполным, поэтому пустое значение заменяется умолчанием
+# из .env.example. Разбор построчный, а не через include: .env — файл секретов,
+# и его содержимое не должно попадать в пространство имён переменных make.
+env_value = $$(sed -n 's/^$(1)=//p' .env 2>/dev/null | tail -n 1)
+
 # Подготовка проекта к запуску: файл секретов, каталоги ключей и профилей,
-# записи в .gitignore. Существующий .env не перезаписывается — он содержит секреты.
-init: ## Подготовка проекта: .env, каталоги ключей и профилей, записи в .gitignore
+# записи в .gitignore, SSH-ключ проекта и конфигурация SSH для git-хоста.
+# Существующие .env, ключ и конфигурация SSH не перезаписываются: первый содержит
+# секреты, ключ может быть уже зарегистрирован в git-сервисе, конфигурация — правки
+# пользователя.
+init: ## Подготовка проекта: .env, каталоги, SSH-ключ и конфигурация SSH, записи в .gitignore
 	@if [ -f .env ]; then \
 		echo "  .env уже существует — оставлен без изменений"; \
 	else \
@@ -29,7 +38,42 @@ init: ## Подготовка проекта: .env, каталоги ключе�
 		printf '%s\n' "$$entry" >> .gitignore; \
 		echo "  в .gitignore добавлено: $$entry"; \
 	done
-	@echo "Готово. Дальше: заполнить .env (GIT_HOST, CLAUDE_PROFILE) и положить SSH-ключ в .ssh/"
+	@ssh_key="$(call env_value,SSH_KEY)"; ssh_key="$${ssh_key:-.ssh/id_ed25519}"; \
+	ssh_config="$(call env_value,SSH_CONFIG)"; ssh_config="$${ssh_config:-.ssh/config}"; \
+	git_host="$(call env_value,GIT_HOST)"; \
+	git_user="$(call env_value,GIT_USER)"; git_user="$${git_user:-git}"; \
+	container_ssh="$(call env_value,CONTAINER_SSH_DIR)"; container_ssh="$${container_ssh:-/home/claude/.ssh}"; \
+	if ! command -v ssh-keygen >/dev/null 2>&1; then \
+		echo "Ошибка: не найдена утилита ssh-keygen — установите пакет openssh-client" >&2; \
+		exit 1; \
+	fi; \
+	mkdir -p "$$(dirname "$$ssh_key")" "$$(dirname "$$ssh_config")"; \
+	if [ -f "$$ssh_key" ]; then \
+		echo "  SSH-ключ $$ssh_key уже существует — оставлен без изменений"; \
+	else \
+		ssh-keygen -q -t ed25519 -f "$$ssh_key" -N "" -C "sdd-developer-kit@$$(basename "$$(pwd)")"; \
+		chmod 600 "$$ssh_key"; \
+		chmod 644 "$$ssh_key.pub"; \
+		echo "  создан SSH-ключ $$ssh_key (ed25519, без passphrase)"; \
+		echo ""; \
+		echo "  Добавьте публичный ключ в git-сервис — без этого push из контейнера не пройдёт:"; \
+		echo ""; \
+		cat "$$ssh_key.pub"; \
+		echo ""; \
+	fi; \
+	if [ -f "$$ssh_config" ]; then \
+		echo "  $$ssh_config уже существует — оставлен без изменений"; \
+	elif [ -z "$$git_host" ]; then \
+		echo "  GIT_HOST не задан — $$ssh_config не создан;"; \
+		echo "  заполните GIT_HOST в .env и выполните make init повторно"; \
+	else \
+		printf 'Host %s\n  HostName %s\n  User %s\n  IdentityFile %s/%s\n  IdentitiesOnly yes\n' \
+			"$$git_host" "$$git_host" "$$git_user" "$$container_ssh" "$$(basename "$$ssh_key")" \
+			> "$$ssh_config"; \
+		chmod 644 "$$ssh_config"; \
+		echo "  создан $$ssh_config: хост $$git_host, ключ $$container_ssh/$$(basename "$$ssh_key")"; \
+	fi
+	@echo "Готово. Дальше: заполнить .env (GIT_HOST, CLAUDE_PROFILE) и создать каталог профиля в .claude-accounts/"
 
 build: ## Сборка образа claude-openspec:local
 	docker compose --profile claude build claude
