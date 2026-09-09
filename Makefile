@@ -1,4 +1,4 @@
-.PHONY: help init openspec-init build up down shell
+.PHONY: help init init-host openspec-init build up down shell
 
 .DEFAULT_GOAL := help
 
@@ -17,20 +17,43 @@ help: ## Список команд с описаниями
 # и его содержимое не должно попадать в пространство имён переменных make.
 env_value = $$(sed -n 's/^$(1)=//p' .env 2>/dev/null | tail -n 1)
 
-# Подготовка проекта к запуску: файл секретов, каталоги ключей и профилей,
-# записи в .gitignore, SSH-ключ проекта и конфигурация SSH для git-хоста.
-# Существующие .env, ключ и конфигурация SSH не перезаписываются: первый содержит
-# секреты, ключ может быть уже зарегистрирован в git-сервисе, конфигурация — правки
-# пользователя.
-init: ## Подготовка проекта: .env, каталоги, SSH-ключ и конфигурация SSH, .gitignore, инструменты SDD
+# Разбор SSH-переменных из .env с умолчаниями. Собран в одном месте и переиспользуется
+# шагами подготовки: значения не расходятся между шагами, а добавление переменной не
+# требует править каждый шаг. Каждый шаг подставляет присвоения в начало своей строки
+# рецепта — переменные shell не переживают переход к следующей строке.
+ssh_vars = ssh_key="$(call env_value,SSH_KEY)"; ssh_key="$${ssh_key:-.ssh/id_ed25519}"; \
+	ssh_config="$(call env_value,SSH_CONFIG)"; ssh_config="$${ssh_config:-.ssh/config}"; \
+	git_host="$(call env_value,GIT_HOST)"; \
+	git_user="$(call env_value,GIT_USER)"; git_user="$${git_user:-git}"; \
+	container_ssh="$(call env_value,CONTAINER_SSH_DIR)"; container_ssh="$${container_ssh:-/home/claude/.ssh}"
+
+# Единая точка входа подготовки: хостовая часть и инструменты SDD. Под-цели вызываются
+# рецептом, а не перечислены зависимостями: зависимости при make -j пошли бы параллельно,
+# а обе под-цели пишут в общие файлы корня проекта.
+init: ## Полная подготовка проекта: хостовая часть и инструменты SDD
+	@$(MAKE) --no-print-directory init-host
+	@$(MAKE) --no-print-directory openspec-init
+	@echo "Готово. Дальше: заполнить .env (GIT_HOST, CLAUDE_PROFILE) и создать каталог профиля в .claude-accounts/"
+
+# Хостовая часть подготовки — всё, что делается до контейнера: файл секретов, каталоги
+# ключей и профилей, записи в .gitignore, SSH-ключ проекта и конфигурация SSH для git-хоста.
+# Существующие .env, ключ и конфигурация SSH не перезаписываются: первый содержит секреты,
+# ключ может быть уже зарегистрирован в git-сервисе, конфигурация — правки пользователя.
+#
+# Цель остаётся отдельной: хостовую подготовку повторяют после заполнения .env, не трогая
+# развёртывание инструментов SDD.
+init-host: ## Хостовая подготовка: .env, каталоги, SSH-ключ и конфигурация SSH, .gitignore
+# Файл секретов
 	@if [ -f .env ]; then \
 		echo "  .env уже существует — оставлен без изменений"; \
 	else \
 		cp .env.example .env; \
 		echo "  создан .env из .env.example"; \
 	fi
+# Каталоги ключей и профилей аккаунтов
 	@mkdir -p .ssh .claude-accounts
 	@chmod 700 .ssh
+# Записи в .gitignore
 	@touch .gitignore
 	@for entry in .env .ssh/ .claude-accounts/; do \
 		grep -qxF "$$entry" .gitignore >/dev/null 2>&1 && continue; \
@@ -38,15 +61,13 @@ init: ## Подготовка проекта: .env, каталоги, SSH-клю
 		printf '%s\n' "$$entry" >> .gitignore; \
 		echo "  в .gitignore добавлено: $$entry"; \
 	done
-	@ssh_key="$(call env_value,SSH_KEY)"; ssh_key="$${ssh_key:-.ssh/id_ed25519}"; \
-	ssh_config="$(call env_value,SSH_CONFIG)"; ssh_config="$${ssh_config:-.ssh/config}"; \
-	git_host="$(call env_value,GIT_HOST)"; \
-	git_user="$(call env_value,GIT_USER)"; git_user="$${git_user:-git}"; \
-	container_ssh="$(call env_value,CONTAINER_SSH_DIR)"; container_ssh="$${container_ssh:-/home/claude/.ssh}"; \
-	if ! command -v ssh-keygen >/dev/null 2>&1; then \
+# Утилита генерации ключей: без неё дальнейшие шаги бессмысленны
+	@if ! command -v ssh-keygen >/dev/null 2>&1; then \
 		echo "Ошибка: не найдена утилита ssh-keygen — установите пакет openssh-client" >&2; \
 		exit 1; \
-	fi; \
+	fi
+# SSH-ключ проекта
+	@$(ssh_vars); \
 	mkdir -p "$$(dirname "$$ssh_key")" "$$(dirname "$$ssh_config")"; \
 	if [ -f "$$ssh_key" ]; then \
 		echo "  SSH-ключ $$ssh_key уже существует — оставлен без изменений"; \
@@ -60,7 +81,9 @@ init: ## Подготовка проекта: .env, каталоги, SSH-клю
 		echo ""; \
 		cat "$$ssh_key.pub"; \
 		echo ""; \
-	fi; \
+	fi
+# Конфигурация SSH для git-хоста
+	@$(ssh_vars); \
 	if [ -f "$$ssh_config" ]; then \
 		echo "  $$ssh_config уже существует — оставлен без изменений"; \
 	elif [ -z "$$git_host" ]; then \
@@ -73,8 +96,6 @@ init: ## Подготовка проекта: .env, каталоги, SSH-клю
 		chmod 644 "$$ssh_config"; \
 		echo "  создан $$ssh_config: хост $$git_host, ключ $$container_ssh/$$(basename "$$ssh_key")"; \
 	fi
-	@$(MAKE) --no-print-directory openspec-init
-	@echo "Готово. Дальше: заполнить .env (GIT_HOST, CLAUDE_PROFILE) и создать каталог профиля в .claude-accounts/"
 
 # Инициализация OpenSpec в проекте. Skills, команды агента и каталог openspec/ создаёт сама
 # утилита из образа, а не поставка kit'а: иначе они остаются от той версии, что лежала
