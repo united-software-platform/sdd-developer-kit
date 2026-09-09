@@ -17,24 +17,6 @@ KIT_REPO="${SDD_KIT_REPO:-united-software-platform/sdd-developer-kit}"
 KIT_REF="${SDD_KIT_REF:-main}"
 MANIFEST_NAME=".sdd-kit-manifest.json"
 
-# Явный список путей поставки; каталоги разворачиваются рекурсивно.
-# Список задан явно, а не выведен из .gitignore: граница поставки не совпадает с границей
-# версионирования — openspec/changes и openspec/specs версионируются, но остаются
-# рабочими артефактами самого kit'а и в чужой проект не переносятся.
-#
-# Вывод openspec init — .claude/skills, .claude/commands и openspec/config.yaml — в поставку
-# не входит, хотя и версионируется в репозитории kit'а: эти файлы порождает утилита из образа
-# агента, и их источником должна быть та версия, что закреплена в OPENSPEC_VERSION, а не та,
-# что лежала в архиве на момент установки. В целевом проекте их разворачивает make init.
-PAYLOAD_PATHS="Dockerfile
-docker-compose.yml
-Makefile
-.env.example
-CLAUDE.md
-AGENTS.md
-rules
-tools/host-runner"
-
 DRY_RUN=0
 ASSUME_YES=0
 SOURCE_DIR=""
@@ -153,12 +135,25 @@ KIT_VERSION=$(head -n 1 "$VERSION_FILE" | tr -d ' \011\015\012')
 
 # --- Первый проход: разворачивание списка поставки ---------------------------
 
+# Перечень путей поставки лежит отдельным файлом, а не переменной этого скрипта: его читает
+# ещё и проверка версии в репозитории kit'а, и два независимых перечня со временем разошлись бы.
+# Читается он из распакованного архива, а не рядом с установщиком: состав поставки принадлежит
+# той ревизии, которую ставят, а установщик может быть запущен по конвейеру из сети.
+#
+# Список задан явно, а не выведен из .gitignore: граница поставки не совпадает с границей
+# версионирования — openspec/changes и openspec/specs версионируются, но остаются
+# рабочими артефактами самого kit'а и в чужой проект не переносятся.
+#
+# Вывод openspec init — .claude/skills, .claude/commands и openspec/config.yaml — в поставку
+# не входит, хотя и версионируется в репозитории kit'а: эти файлы порождает утилита из образа
+# агента, и их источником должна быть та версия, что закреплена в OPENSPEC_VERSION, а не та,
+# что лежала в архиве на момент установки. В целевом проекте их разворачивает make init.
+PAYLOAD_LIST="$SRC/payload.txt"
+[ -f "$PAYLOAD_LIST" ] || die "в составе kit'а нет перечня путей поставки payload.txt"
+
 : > "$FILES"
-OLD_IFS=$IFS
-IFS='
-'
-for payload_path in $PAYLOAD_PATHS; do
-    IFS=$OLD_IFS
+while IFS= read -r payload_path; do
+    [ -n "$payload_path" ] || continue
     src_path="$SRC/$payload_path"
     # Отсутствующий путь прерывает установку: молчаливый пропуск сделал бы состав
     # поставки зависящим от того, что попало в архив.
@@ -168,10 +163,7 @@ for payload_path in $PAYLOAD_PATHS; do
     else
         printf '%s\n' "$payload_path" >> "$FILES"
     fi
-    IFS='
-'
-done
-IFS=$OLD_IFS
+done < "$PAYLOAD_LIST"
 
 sort -o "$FILES" "$FILES"
 [ -s "$FILES" ] || die "состав поставки пуст"
