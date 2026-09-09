@@ -1,4 +1,5 @@
-.PHONY: help init init-host openspec-init build up down shell
+.PHONY: help init init-host init-env init-dirs init-gitignore init-ssh-key init-ssh-config \
+	openspec-init build up down shell
 
 .DEFAULT_GOAL := help
 
@@ -8,7 +9,7 @@ help: ## Список команд с описаниями
 	@printf 'Команды окружения SDD Developer Kit:\n\n'
 	@grep -E '^[a-zA-Z_-]+:.*?## .*$$' $(MAKEFILE_LIST) \
 		| sed 's/:.*## /|/' \
-		| awk -F'|' '{printf "  make %-14s %s\n", $$1, $$2}'
+		| awk -F'|' '{printf "  make %-16s %s\n", $$1, $$2}'
 	@printf '\nПорядок установки и переменные окружения — в README.md проекта kit'"'"'а.\n'
 
 # Значение переменной из .env: файл заполняется пользователем и на момент первого
@@ -35,25 +36,40 @@ init: ## Полная подготовка проекта: хостовая ча
 	@$(MAKE) --no-print-directory openspec-init
 	@echo "Готово. Дальше: заполнить .env (GIT_HOST, CLAUDE_PROFILE) и создать каталог профиля в .claude-accounts/"
 
-# Хостовая часть подготовки — всё, что делается до контейнера: файл секретов, каталоги
-# ключей и профилей, записи в .gitignore, SSH-ключ проекта и конфигурация SSH для git-хоста.
-# Существующие .env, ключ и конфигурация SSH не перезаписываются: первый содержит секреты,
-# ключ может быть уже зарегистрирован в git-сервисе, конфигурация — правки пользователя.
+# Хостовая часть подготовки — всё, что делается до контейнера: файл секретов, каталоги ключей
+# и профилей, записи в .gitignore, SSH-ключ проекта и конфигурация SSH для git-хоста. Шаги
+# вызываются рецептом, а не перечислены зависимостями: зависимости при make -j пошли бы
+# параллельно, а шаги пишут в общие файлы корня проекта.
 #
 # Цель остаётся отдельной: хостовую подготовку повторяют после заполнения .env, не трогая
 # развёртывание инструментов SDD.
 init-host: ## Хостовая подготовка: .env, каталоги, SSH-ключ и конфигурация SSH, .gitignore
-# Файл секретов
+	@$(MAKE) --no-print-directory init-env
+	@$(MAKE) --no-print-directory init-dirs
+	@$(MAKE) --no-print-directory init-gitignore
+	@$(MAKE) --no-print-directory init-ssh-key
+	@$(MAKE) --no-print-directory init-ssh-config
+
+# Файл секретов. Существующий .env не перезаписывается: в нём заполненные пользователем значения,
+# а .env.example — только умолчания.
+init-env: ## Создать .env из .env.example
 	@if [ -f .env ]; then \
 		echo "  .env уже существует — оставлен без изменений"; \
 	else \
 		cp .env.example .env; \
 		echo "  создан .env из .env.example"; \
 	fi
-# Каталоги ключей и профилей аккаунтов
+
+# Каталоги ключей и профилей аккаунтов. Права 700 на .ssh — требование ssh-клиента: с более
+# широкими правами он отказывается работать с лежащим внутри ключом.
+init-dirs: ## Создать каталоги .ssh и .claude-accounts
 	@mkdir -p .ssh .claude-accounts
 	@chmod 700 .ssh
-# Записи в .gitignore
+
+# Записи в .gitignore. Каждая добавляется однократно: повторный прогон находит её точным
+# совпадением строки и пропускает. Перевод строки дописывается перед записью, если файл им
+# не заканчивается, — иначе запись склеилась бы с последней строкой.
+init-gitignore: ## Добавить в .gitignore .env, .ssh/ и .claude-accounts/
 	@touch .gitignore
 	@for entry in .env .ssh/ .claude-accounts/; do \
 		grep -qxF "$$entry" .gitignore >/dev/null 2>&1 && continue; \
@@ -61,14 +77,17 @@ init-host: ## Хостовая подготовка: .env, каталоги, SSH
 		printf '%s\n' "$$entry" >> .gitignore; \
 		echo "  в .gitignore добавлено: $$entry"; \
 	done
-# Утилита генерации ключей: без неё дальнейшие шаги бессмысленны
+
+# SSH-ключ проекта. Существующий ключ не перезаписывается: он может быть уже зарегистрирован
+# в git-сервисе. Проверка ssh-keygen — часть этого шага: без утилиты бессмысленна именно
+# генерация ключа, и при отдельном вызове цели проверка обязана выполниться.
+init-ssh-key: ## Создать SSH-ключ проекта (ed25519)
 	@if ! command -v ssh-keygen >/dev/null 2>&1; then \
 		echo "Ошибка: не найдена утилита ssh-keygen — установите пакет openssh-client" >&2; \
 		exit 1; \
 	fi
-# SSH-ключ проекта
 	@$(ssh_vars); \
-	mkdir -p "$$(dirname "$$ssh_key")" "$$(dirname "$$ssh_config")"; \
+	mkdir -p "$$(dirname "$$ssh_key")"; \
 	if [ -f "$$ssh_key" ]; then \
 		echo "  SSH-ключ $$ssh_key уже существует — оставлен без изменений"; \
 	else \
@@ -82,8 +101,13 @@ init-host: ## Хостовая подготовка: .env, каталоги, SSH
 		cat "$$ssh_key.pub"; \
 		echo ""; \
 	fi
-# Конфигурация SSH для git-хоста
+
+# Конфигурация SSH для git-хоста. Существующая конфигурация не перезаписывается: в ней могут быть
+# правки пользователя. Путь ключа записывается от каталога SSH внутри контейнера — файл читает
+# ssh из контейнера, а не с хоста.
+init-ssh-config: ## Создать конфигурацию SSH для git-хоста из .env
 	@$(ssh_vars); \
+	mkdir -p "$$(dirname "$$ssh_config")"; \
 	if [ -f "$$ssh_config" ]; then \
 		echo "  $$ssh_config уже существует — оставлен без изменений"; \
 	elif [ -z "$$git_host" ]; then \
