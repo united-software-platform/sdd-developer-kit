@@ -1,0 +1,246 @@
+# Сборка и публикация образа окружения агента.
+#
+# Образ собирается здесь, а не в каждом установленном проекте: Dockerfile один и тот же
+# для всех проектов, а локальная сборка давала бы у каждого свой, ничем не подтверждённый
+# результат. Установленный проект получает готовый проверенный образ из GHCR.
+#
+# Порядок заданий: resolve (параметры сборки) -> check (по одной архитектуре) -> push
+# (мультиарх-манифест). Разделение обязательно: мультиплатформенный образ нельзя загрузить
+# в локальный демон Docker целиком, поэтому проверка запуском возможна только по одной
+# архитектуре за раз, а публиковать непроверенный образ нельзя.
+name: docker-agent
+
+on:
+  # Path-фильтр отсекает правки правил, документации и артефактов методологии: содержимого
+  # образа они не касаются. VERSION входит в фильтр потому, что задаёт тег версии образа:
+  # без него инкрементация версии не породила бы образ с соответствующим тегом.
+  push:
+    branches:
+      - main
+    paths:
+      - Dockerfile
+      - VERSION
+      - .github/workflows/docker-agent.yml
+  pull_request:
+    paths:
+      - Dockerfile
+      - VERSION
+      - .github/workflows/docker-agent.yml
+  # Состав образа зависит от внешних источников — базового образа claude:latest и npm-реестра, —
+  # и коммитами их обновления не сопровождаются. Расписание — единственный триггер, который их
+  # ловит. Время смещено от круглого часа: на нулевой минуте очередь раннеров перегружена.
+  schedule:
+    - cron: '17 3 * * *'
+  workflow_dispatch:
+
+# Сборка arm64 идёт через эмуляцию и занимает десятки минут; держать в очереди заведомо
+# устаревший прогон той же ссылки незачем.
+concurrency:
+  group: docker-agent-${{ github.ref }}
+  cancel-in-progress: true
+
+env:
+  # Мажорная граница версии утилиты OpenSpec. Разрешение без границы впустило бы в образ
+  # несовместимый выпуск: скиллы openspec-* из состава поставки зависят от совместимости
+  # команд утилиты. Разряд продублирован в значении по умолчанию ARG OPENSPEC_VERSION —
+  # расхождение двух мест обнаруживает задание resolve и останавливает прогон.
+  OPENSPEC_MAJOR: '1'
+  OPENSPEC_PACKAGE: '@fission-ai/openspec'
+
+jobs:
+  # Параметры считаются один раз на прогон и передаются и в проверку, и в публикацию:
+  # рассчитай версию дважды — и опубликованным окажется не то, что проверено.
+  resolve:
+    name: Параметры сборки
+    runs-on: ubuntu-latest
+
+    permissions:
+      contents: read
+
+    outputs:
+      image: ${{ steps.params.outputs.image }}
+      kit_version: ${{ steps.params.outputs.kit_version }}
+      openspec_version: ${{ steps.params.outputs.openspec_version }}
+
+    steps:
+      - name: Получение репозитория
+        uses: actions/checkout@v4
+
+      # Имя образа выводится из координат репозитория, а не задаётся строкой: расхождение
+      # имени с репозиторием-исходником оставило бы пользователя без способа установить,
+      # из чего собран образ. Нижний регистр обязателен — путь GHCR заглавных не допускает,
+      # а владелец репозитория их содержать может.
+      - name: Расчёт имени образа и версий
+        id: params
+        env:
+          REPOSITORY: ${{ github.repository }}
+        run: |
+          image=$(printf '%s\n' "$REPOSITORY" | tr '[:upper:]' '[:lower:]')
+
+          kit_version=$(head -n 1 VERSION | tr -d ' \011\015\012')
+          printf '%s\n' "$kit_version" | grep -Eq '^[0-9]+\.[0-9]+\.[0-9]+$' \
+              || { echo "VERSION не разбирается как МАЖОР.МИНОР.ПАТЧ: прочитано «$kit_version»" >&2; exit 1; }
+
+          # Значение по умолчанию из Dockerfile сверяется с мажорной границей пайплайна:
+          # это два независимых места, и разойтись они могут молча.
+          default=$(sed -n 's/^ARG OPENSPEC_VERSION=//p' Dockerfile | tail -n 1 | tr -d ' \011\015\012')
+          [ -n "$default" ] \
+              || { echo "в Dockerfile не найден ARG OPENSPEC_VERSION со значением по умолчанию" >&2; exit 1; }
+          [ "${default%%.*}" = "$OPENSPEC_MAJOR" ] \
+              || { echo "мажорная граница пайплайна ($OPENSPEC_MAJOR) разошлась со значением" >&2
+                   echo "по умолчанию в Dockerfile ($default): приведите их к одному разряду." >&2
+                   exit 1; }
+
+          # Конкретная версия разрешается в пределах мажорной: полное закрепление сделало бы
+          # плановую пересборку бессмысленной для главного инструмента kit'а.
+          openspec_version=$(npm view "$OPENSPEC_PACKAGE@^$OPENSPEC_MAJOR" version \
+              | tail -n 1 | awk '{print $NF}' | tr -d "' \011\015\012")
+          printf '%s\n' "$openspec_version" | grep -Eq '^[0-9]+\.[0-9]+\.[0-9]+' \
+              || { echo "версия OpenSpec не разрешилась: получено «$openspec_version»" >&2; exit 1; }
+
+          echo "image=$image" >> "$GITHUB_OUTPUT"
+          echo "kit_version=$kit_version" >> "$GITHUB_OUTPUT"
+          echo "openspec_version=$openspec_version" >> "$GITHUB_OUTPUT"
+
+          echo "Образ:            ghcr.io/$image"
+          echo "Версия kit'а:     $kit_version"
+          echo "Версия OpenSpec:  $openspec_version (граница ^$OPENSPEC_MAJOR)"
+
+  # Проверка запуском — условие публикации. Задания матрицы независимы: медленная
+  # эмулированная сборка arm64 не задерживает amd64.
+  check:
+    name: Проверка образа (${{ matrix.platform }})
+    needs: resolve
+    runs-on: ubuntu-latest
+
+    permissions:
+      contents: read
+
+    strategy:
+      fail-fast: false
+      matrix:
+        platform:
+          - linux/amd64
+          - linux/arm64
+
+    steps:
+      - name: Получение репозитория
+        uses: actions/checkout@v4
+
+      # Раннер — x86_64; сборка и запуск arm64 идут через эмуляцию.
+      - name: Эмуляция чужой архитектуры
+        uses: docker/setup-qemu-action@v3
+
+      - name: Сборщик образов
+        uses: docker/setup-buildx-action@v3
+
+      # Образ грузится в локальный демон: без этого его нечем запустить. Кэш слоёв разделён
+      # по архитектурам и переиспользуется заданием публикации.
+      - name: Сборка под одну архитектуру
+        uses: docker/build-push-action@v6
+        with:
+          context: .
+          platforms: ${{ matrix.platform }}
+          build-args: |
+            OPENSPEC_VERSION=${{ needs.resolve.outputs.openspec_version }}
+          load: true
+          tags: sdd-developer-kit:check
+          cache-from: type=gha,scope=${{ matrix.platform }}
+          cache-to: type=gha,mode=max,scope=${{ matrix.platform }}
+
+      # Инструменты запускаются от пользователя образа, а не от root: именно так их будет
+      # вызывать агент, и права на файлы интерпретатора проверяются заодно. Версия OpenSpec
+      # сверяется с рассчитанной: плановая пересборка идёт без участия человека, и образ
+      # с неожиданным составом иначе попал бы в реестр под тем же тегом, что и рабочий.
+      - name: Запуск инструментов образа
+        env:
+          PLATFORM: ${{ matrix.platform }}
+          EXPECTED_OPENSPEC: ${{ needs.resolve.outputs.openspec_version }}
+        run: |
+          run() { docker run --rm --platform "$PLATFORM" sdd-developer-kit:check "$@"; }
+
+          echo "== id =="            && run id
+          echo "== git =="           && run git --version
+          echo "== openspec =="      && run openspec --version
+          echo "== python3 =="       && run python3 --version
+          echo "== uv =="            && run uv --version
+
+          user=$(run id -un | tr -d ' \011\015\012')
+          [ "$user" = "claude" ] \
+              || { echo "инструменты запускаются не от пользователя образа: получено «$user»" >&2; exit 1; }
+
+          actual=$(run openspec --version | grep -Eo '[0-9]+\.[0-9]+\.[0-9]+' | head -n 1)
+          [ "$actual" = "$EXPECTED_OPENSPEC" ] \
+              || { echo "версия OpenSpec в образе ($actual) разошлась с рассчитанной ($EXPECTED_OPENSPEC)" >&2
+                   exit 1; }
+
+  # Публикация выполняется только после успешной проверки обеих архитектур и не выполняется
+  # для запроса на слияние: запрос из форка не должен получать запись в реестр организации.
+  push:
+    name: Публикация образа
+    needs:
+      - resolve
+      - check
+    if: github.event_name != 'pull_request'
+    runs-on: ubuntu-latest
+
+    # Право записи в реестр объявлено только здесь: заданиям расчёта и проверки оно не нужно.
+    permissions:
+      contents: read
+      packages: write
+
+    steps:
+      - name: Получение репозитория
+        uses: actions/checkout@v4
+
+      - name: Эмуляция чужой архитектуры
+        uses: docker/setup-qemu-action@v3
+
+      - name: Сборщик образов
+        uses: docker/setup-buildx-action@v3
+
+      # Встроенный токен рабочего процесса вместо долгоживущих учётных данных реестра:
+      # секрет, который некому отозвать, переживает и пайплайн, и потребность в нём.
+      - name: Вход в реестр
+        uses: docker/login-action@v3
+        with:
+          registry: ghcr.io
+          username: ${{ github.actor }}
+          password: ${{ secrets.GITHUB_TOKEN }}
+
+      # Тег latest проставляется только из основной ветки: сборка из другой ссылки не должна
+      # подменять образ, который получают все установленные проекты.
+      - name: Теги образа
+        id: tags
+        env:
+          IMAGE: ghcr.io/${{ needs.resolve.outputs.image }}
+          KIT_VERSION: ${{ needs.resolve.outputs.kit_version }}
+          IS_MAIN: ${{ github.ref == 'refs/heads/main' }}
+        run: |
+          tags="$IMAGE:$KIT_VERSION"
+          [ "$IS_MAIN" = "true" ] && tags="$tags,$IMAGE:latest"
+          echo "list=$tags" >> "$GITHUB_OUTPUT"
+          echo "Теги публикации: $tags"
+
+      # Слои берутся из кэша заданий проверки, поэтому публикуется ровно то, что проверено,
+      # и повторной сборки не происходит.
+      - name: Сборка и публикация мультиарх-образа
+        uses: docker/build-push-action@v6
+        with:
+          context: .
+          platforms: linux/amd64,linux/arm64
+          build-args: |
+            OPENSPEC_VERSION=${{ needs.resolve.outputs.openspec_version }}
+          push: true
+          tags: ${{ steps.tags.outputs.list }}
+          cache-from: |
+            type=gha,scope=linux/amd64
+            type=gha,scope=linux/arm64
+
+      # Состав манифеста печатается в лог: обе архитектуры под одним тегом — то, ради чего
+      # задания матрицы и сводятся в одну публикацию.
+      - name: Состав опубликованного манифеста
+        env:
+          IMAGE: ghcr.io/${{ needs.resolve.outputs.image }}
+          KIT_VERSION: ${{ needs.resolve.outputs.kit_version }}
+        run: docker buildx imagetools inspect "$IMAGE:$KIT_VERSION"

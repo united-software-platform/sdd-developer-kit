@@ -1,5 +1,5 @@
 .PHONY: help init init-host init-env init-dirs init-gitignore init-ssh-key init-ssh-config \
-	openspec-init build up down shell
+	openspec-init up down shell
 
 .DEFAULT_GOAL := help
 
@@ -141,10 +141,16 @@ openspec-init: ## Развернуть инструменты SDD: openspec init
 	docker compose --profile claude run --rm -T claude \
 		openspec init --tools claude --language ru
 
-build: ## Сборка образа claude-openspec:local
-	docker compose --profile claude build claude
-
+# Запуск контейнера агента. Образ не собирается на месте, а приходит из реестра, поэтому перед
+# запуском выполняется попытка его обновить: тег latest в локальном кэше сам не обновляется,
+# и результаты плановой пересборки иначе никогда не дошли бы до проекта.
+#
+# Неуспех попытки не останавливает запуск: без сети контейнер поднимается на ранее загруженном
+# образе. Жёсткое обновление сделало бы запуск невозможным без сети даже при готовом образе.
+# Если образа нет вовсе, ошибку выдаст сам запуск — с именем и тегом запрошенного образа.
 up: ## Запуск контейнера агента
+	@docker compose --profile claude pull claude \
+		|| echo "  образ не обновлён (реестр недоступен) — запуск на локально доступном образе"
 	docker compose --profile claude up -d --force-recreate claude
 
 down: ## Остановка контейнера
