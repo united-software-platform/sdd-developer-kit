@@ -22,7 +22,7 @@ from urllib.parse import urlsplit
 # цель Makefile сюда годится. Интерактивные цели (`shell`) исключены намеренно — раннер
 # однопоточный, а процесс, ожидающий терминала, не завершился бы сам и удерживал бы раннер
 # до AGENT_RUNNER_TIMEOUT, блокируя все последующие запросы. Расширять осознанно.
-ALLOWED_TARGETS = frozenset({"build", "up", "down", "init", "help"})
+ALLOWED_TARGETS = frozenset({"build", "up", "down", "init", "openspec-init", "help"})
 
 # Цели выполняются в корне репозитория: там лежит Makefile окружения
 REPOSITORY_ROOT = Path(__file__).resolve().parents[2]

@@ -21,6 +21,11 @@ MANIFEST_NAME=".sdd-kit-manifest.json"
 # Список задан явно, а не выведен из .gitignore: граница поставки не совпадает с границей
 # версионирования — openspec/changes и openspec/specs версионируются, но остаются
 # рабочими артефактами самого kit'а и в чужой проект не переносятся.
+#
+# Вывод openspec init — .claude/skills, .claude/commands и openspec/config.yaml — в поставку
+# не входит, хотя и версионируется в репозитории kit'а: эти файлы порождает утилита из образа
+# агента, и их источником должна быть та версия, что закреплена в OPENSPEC_VERSION, а не та,
+# что лежала в архиве на момент установки. В целевом проекте их разворачивает make init.
 PAYLOAD_PATHS="Dockerfile
 docker-compose.yml
 Makefile
@@ -28,9 +33,6 @@ Makefile
 CLAUDE.md
 AGENTS.md
 rules
-.claude/skills
-.claude/commands
-openspec/config.yaml
 tools/host-runner"
 
 DRY_RUN=0

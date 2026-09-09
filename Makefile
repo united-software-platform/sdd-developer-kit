@@ -1,4 +1,4 @@
-.PHONY: help init build up down shell
+.PHONY: help init openspec-init build up down shell
 
 .DEFAULT_GOAL := help
 
@@ -8,7 +8,7 @@ help: ## Список команд с описаниями
 	@printf 'Команды окружения SDD Developer Kit:\n\n'
 	@grep -E '^[a-zA-Z_-]+:.*?## .*$$' $(MAKEFILE_LIST) \
 		| sed 's/:.*## /|/' \
-		| awk -F'|' '{printf "  make %-8s %s\n", $$1, $$2}'
+		| awk -F'|' '{printf "  make %-14s %s\n", $$1, $$2}'
 	@printf '\nПорядок установки и переменные окружения — в README.md проекта kit'"'"'а.\n'
 
 # Значение переменной из .env: файл заполняется пользователем и на момент первого
@@ -22,7 +22,7 @@ env_value = $$(sed -n 's/^$(1)=//p' .env 2>/dev/null | tail -n 1)
 # Существующие .env, ключ и конфигурация SSH не перезаписываются: первый содержит
 # секреты, ключ может быть уже зарегистрирован в git-сервисе, конфигурация — правки
 # пользователя.
-init: ## Подготовка проекта: .env, каталоги, SSH-ключ и конфигурация SSH, записи в .gitignore
+init: ## Подготовка проекта: .env, каталоги, SSH-ключ и конфигурация SSH, .gitignore, инструменты SDD
 	@if [ -f .env ]; then \
 		echo "  .env уже существует — оставлен без изменений"; \
 	else \
@@ -73,7 +73,28 @@ init: ## Подготовка проекта: .env, каталоги, SSH-клю
 		chmod 644 "$$ssh_config"; \
 		echo "  создан $$ssh_config: хост $$git_host, ключ $$container_ssh/$$(basename "$$ssh_key")"; \
 	fi
+	@$(MAKE) --no-print-directory openspec-init
 	@echo "Готово. Дальше: заполнить .env (GIT_HOST, CLAUDE_PROFILE) и создать каталог профиля в .claude-accounts/"
+
+# Инициализация OpenSpec в проекте. Skills, команды агента и каталог openspec/ создаёт сама
+# утилита из образа, а не поставка kit'а: иначе они остаются от той версии, что лежала
+# в архиве, и расходятся с OPENSPEC_VERSION образа. Язык артефактов задаётся ключом --language,
+# поэтому openspec/config.yaml тоже не входит в поставку.
+#
+# Цель вызывается из init и остаётся отдельной: после смены версии OpenSpec в образе
+# инструменты обновляются повторным вызовом, без прохода по хостовой части подготовки.
+openspec-init: ## Развернуть инструменты SDD: openspec init в контейнере агента
+	@if [ ! -f .env ]; then \
+		echo "Ошибка: нет файла .env — сначала выполните make init" >&2; \
+		exit 1; \
+	fi
+	@profile="$${CLAUDE_PROFILE:-$(call env_value,CLAUDE_PROFILE)}"; \
+	profile="$${profile:-__no_profile__}"; \
+	accounts="$${CLAUDE_ACCOUNTS_DIR:-$(call env_value,CLAUDE_ACCOUNTS_DIR)}"; \
+	accounts="$${accounts:-.claude-accounts}"; \
+	mkdir -p "$$accounts/$$profile"
+	docker compose --profile claude run --rm -T claude \
+		openspec init --tools claude --language ru
 
 build: ## Сборка образа claude-openspec:local
 	docker compose --profile claude build claude
@@ -99,3 +120,4 @@ shell: ## Вход в контейнер агента
 		exit 1; \
 	fi; \
 	docker compose --profile claude exec claude bash
+
