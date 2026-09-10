@@ -7,10 +7,10 @@ services:
     # Имя и тег вынесены в переменные: закрепить конкретную версию или подставить свою сборку
     # можно в .env, не редактируя этот файл, — правка пережила бы не всякую переустановку kit'а.
     image: ${SDD_KIT_IMAGE:-ghcr.io/united-software-platform/sdd-developer-kit}:${SDD_KIT_IMAGE_TAG:-latest}
-    # Отдельный compose-профиль: `docker compose up` сервисов окружения агента не поднимаетL
+    # Отдельный compose-профиль: `docker compose up` сервисов окружения агента не поднимает
     profiles: ["claude"]
     # Команда по умолчанию — сам агент; аргумент после имени сервиса её заменяет (bash, git, …)
-    command: clauderegistry
+    command: claude
     working_dir: ${PROJECT_DIR:-/app}
     env_file: .env
     # Имя хоста для раннера целей make: на Linux host.docker.internal сам не резолвится
