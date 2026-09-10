@@ -7,8 +7,8 @@
 
 | Слой | Состав | Ограничение |
 |------|--------|-------------|
-| Поставка | `docker-compose.yml`, `Makefile`, `.env.example`, `CLAUDE.md`, `AGENTS.md`, `rules/`, `tools/host-runner/` | перечислен в `payload.txt`; изменение требует повышения версии по `repo-versioning` |
-| Репозиторий kit'а | `README.md`, `Dockerfile`, `install.sh`, `tools/make-lint/`, `tools/version/`, пайплайны | в чужие проекты не попадает |
+| Поставка | `docker-compose.yml`, `Makefile`, `.env.example`, `CLAUDE.md`, `AGENTS.md`, `rules/`, `tools/host-runner/` | перечислен в `PAYLOAD_PATHS` (`install.sh`); изменение требует повышения версии по `repo-versioning` |
+| Репозиторий kit'а | `README.md`, `CONTRIBUTING.md`, `Dockerfile`, `install.sh`, `tools/make-lint/`, пайплайны | в чужие проекты не попадает |
 | Вывод инструмента | `.claude/commands/opsx/`, `.claude/skills/openspec-*/`, `openspec/config.yaml` | порождается утилитой из образа, в поставку не входит |
 
 Правила из `rules/` пришли из методологии стороннего проекта и сохраняют её следы: коды `STOR-001`
@@ -100,8 +100,8 @@
 
 ### Проверка документации повторяет приём `make-lint`
 
-`tools/docs-lint/check.sh` — сценарий POSIX `sh` рядом с существующими `tools/make-lint/check.sh`
-и `tools/version/check.sh`: те же коды возврата `0`/`1`/`2`, тот же вердикт локально и в пайплайне,
+`tools/docs-lint/check.sh` — сценарий POSIX `sh` рядом с существующим `tools/make-lint/check.sh`:
+те же коды возврата `0`/`1`/`2`, тот же вердикт локально и в пайплайне,
 `.github/workflows/docs-lint.yml` — тонкая обёртка без ключей.
 
 Область проверки — документация репозитория: `README.md`, `CLAUDE.md`, `AGENTS.md`, `rules/`,
@@ -124,8 +124,9 @@
 ## Risks / Trade-offs
 
 - **Правка правил меняет поведение агентов в уже установленных проектах** → изменение проходит
-  через версию: `payload.txt` включает `rules/`, `AGENTS.md` и `docker-compose.yml`, поэтому пропуск
-  инкрементации заметит `tools/version/check.sh`. Рекомендуемый разряд — `minor`: состав файлов
+  через версию: `PAYLOAD_PATHS` включает `rules/`, `AGENTS.md` и `docker-compose.yml`. Проверки,
+  которая заметила бы пропуск инкрементации, в репозитории нет — решение о выпуске принимает
+  человек. Рекомендуемый разряд — `minor`: состав файлов
   совместим, но действующие правила удаляются.
 - **Конфликт с активным change по `docker-compose.yml`** → правятся разные строки; если
   `publish-agent-image-to-ghcr` будет применён позже, его правка ложится поверх без пересечения.
@@ -135,8 +136,9 @@
 - **Потеря локальных правок в командах и skills при снятии с версионирования** → файлы порождаются
   утилитой и правок не содержат; перед удалением из индекса задача сверяет их с выводом
   `make openspec-init` на текущем образе.
-- **Чистый клон без инструментов SDD** → раздел `README.md` о разработке kit'а дополняется
-  указанием, что команды и skills разворачивает `make openspec-init`.
+- **Чистый клон без инструментов SDD** → `CONTRIBUTING.md` дополняется указанием, что команды
+  и skills разворачивает `make openspec-init`: материал разработчика набора вынесен из `README.md`
+  изменением `revise-readme-and-startup`.
 
 ## Migration Plan
 

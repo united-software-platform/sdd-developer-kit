@@ -9,6 +9,14 @@
 # Claude per-account config volumes
 .claude-accounts/
 
+# Вывод openspec init: порождается утилитой из образа, версионировать нельзя —
+# копия расходится с образом при первой же смене версии OpenSpec
+.claude/commands/opsx/
+.claude/skills/openspec-*/
+
+# Локальные разрешения агента: файл среды разработчика, не исходник репозитория
+.claude/settings.local.json
+
 .gh/
 .ssh/
 /tmp
