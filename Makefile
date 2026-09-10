@@ -1,5 +1,5 @@
 .PHONY: help init init-host init-env init-dirs init-gitignore init-ssh-key init-ssh-config \
-	openspec-init up down shell
+	openspec-init
 
 .DEFAULT_GOAL := help
 
@@ -140,35 +140,3 @@ openspec-init: ## Развернуть инструменты SDD: openspec init
 	mkdir -p "$$accounts/$$profile"
 	docker compose --profile claude run --rm -T claude \
 		openspec init --tools claude --language ru
-
-# Запуск контейнера агента. Образ не собирается на месте, а приходит из реестра, поэтому перед
-# запуском выполняется попытка его обновить: тег latest в локальном кэше сам не обновляется,
-# и результаты плановой пересборки иначе никогда не дошли бы до проекта.
-#
-# Неуспех попытки не останавливает запуск: без сети контейнер поднимается на ранее загруженном
-# образе. Жёсткое обновление сделало бы запуск невозможным без сети даже при готовом образе.
-# Если образа нет вовсе, ошибку выдаст сам запуск — с именем и тегом запрошенного образа.
-up: ## Запуск контейнера агента
-	@docker compose --profile claude pull claude \
-		|| echo "  образ не обновлён (реестр недоступен) — запуск на локально доступном образе"
-	docker compose --profile claude up -d --force-recreate claude
-
-down: ## Остановка контейнера
-	docker compose --profile claude down
-
-# Вход в контейнер агента. Профиль берётся из окружения или из .env: без него
-# контейнер смонтировал бы несуществующий каталог и остался без доступа к аккаунту.
-shell: ## Вход в контейнер агента
-	@profile="$${CLAUDE_PROFILE:-$$(sed -n 's/^CLAUDE_PROFILE=//p' .env 2>/dev/null | tail -n 1)}"; \
-	accounts="$${CLAUDE_ACCOUNTS_DIR:-$$(sed -n 's/^CLAUDE_ACCOUNTS_DIR=//p' .env 2>/dev/null | tail -n 1)}"; \
-	accounts="$${accounts:-.claude-accounts}"; \
-	if [ -z "$$profile" ]; then \
-		echo "Ошибка: не задан CLAUDE_PROFILE — укажите профиль аккаунта в .env или в окружении" >&2; \
-		exit 1; \
-	fi; \
-	if [ ! -d "$$accounts/$$profile" ]; then \
-		echo "Ошибка: каталог профиля не найден: $$accounts/$$profile" >&2; \
-		exit 1; \
-	fi; \
-	docker compose --profile claude exec claude bash
-
