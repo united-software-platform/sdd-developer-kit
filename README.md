@@ -1,6 +1,6 @@
 # SDD Developer Kit
 
-[![выпуск Claude Code в опубликованном образе](https://img.shields.io/endpoint?url=https%3A%2F%2Fraw.githubusercontent.com%2Funited-software-platform%2Fsdd-developer-kit%2Fbadges%2Fclaude.json)](https://github.com/orgs/united-software-platform/packages/container/package/sdd-developer-kit)
+[![выпуск Claude Code в опубликованном образе](https://img.shields.io/endpoint?url=https%3A%2F%2Fraw.githubusercontent.com%2Funited-software-platform%2Fsdd-developer-kit%2Fbadges%2Fclaude.json)](https://github.com/united-software-platform/claude)
 [![версия Python из Dockerfile](https://img.shields.io/badge/dynamic/regex?url=https%3A%2F%2Fraw.githubusercontent.com%2Funited-software-platform%2Fsdd-developer-kit%2Fmain%2FDockerfile&search=ARG%20PYTHON_VERSION%3D%28%5B%5Cd.%5D%2B%29&replace=%241&label=python&color=3776AB&logo=python)](./Dockerfile)
 [![версия OpenSpec в опубликованном образе](https://img.shields.io/endpoint?url=https%3A%2F%2Fraw.githubusercontent.com%2Funited-software-platform%2Fsdd-developer-kit%2Fbadges%2Fopenspec.json)](https://github.com/Fission-AI/OpenSpec)
 [![версия uv из Dockerfile](https://img.shields.io/badge/dynamic/regex?url=https%3A%2F%2Fraw.githubusercontent.com%2Funited-software-platform%2Fsdd-developer-kit%2Fmain%2FDockerfile&search=ARG%20UV_VERSION%3D%28%5B%5Cd.%5D%2B%29&replace=%241&label=uv&color=DE5FE9)](./Dockerfile)
