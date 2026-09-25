@@ -1,0 +1,43 @@
+# ВРЕМЕННЫЙ сценарий проверки: возврат к предыдущему составу по его тегу.
+# Живёт только в ветке проверки, в main не сливается и удаляется вместе с ней.
+name: tmp-rollback
+
+on:
+  pull_request:
+
+env:
+  IMAGE: ghcr.io/united-software-platform/sdd-developer-kit
+
+jobs:
+  rollback:
+    name: Возврат к предыдущему составу
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      # Тег состава прошлой публикации обязан и дальше отдавать тот же образ, что тогда,
+      # независимо от того, что помечено latest.
+      - name: Сверка тега состава с latest
+        env:
+          # Первая публикация новым пайплайном — состав набора 1.4.1
+          OLD_TAG: 1.4.1-20260925-205732
+        run: |
+          show() {
+              echo "== $1 =="
+              docker pull --quiet "$IMAGE:$1" >/dev/null
+              docker image inspect "$IMAGE:$1" --format \
+                  'версия набора: {{index .Config.Labels "org.opencontainers.image.version"}}
+базовый образ: {{index .Config.Labels "org.opencontainers.image.base.name"}}
+утилита:       {{index .Config.Labels "io.sdd-kit.openspec.version"}}'
+              echo "claude в контейнере: $(docker run --rm "$IMAGE:$1" claude --version)"
+          }
+          show "$OLD_TAG"
+          show latest
+
+          old_kit=$(docker image inspect "$IMAGE:$OLD_TAG" \
+              --format '{{index .Config.Labels "org.opencontainers.image.version"}}')
+          new_kit=$(docker image inspect "$IMAGE:latest" \
+              --format '{{index .Config.Labels "org.opencontainers.image.version"}}')
+          [ "$old_kit" != "$new_kit" ] \
+              || { echo "теги указывают на образы одной версии набора — проверка не показательна" >&2; exit 1; }
+          echo "тег состава $OLD_TAG отдаёт набор $old_kit, latest — $new_kit"
