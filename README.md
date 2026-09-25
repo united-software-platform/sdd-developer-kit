@@ -1,8 +1,8 @@
 # SDD Developer Kit
 
-[![базовый образ Claude из Dockerfile](https://img.shields.io/badge/dynamic/regex?url=https%3A%2F%2Fraw.githubusercontent.com%2Funited-software-platform%2Fsdd-developer-kit%2Fmain%2FDockerfile&search=FROM%20%28ghcr%5C.io%2F%5CS%2B%2Fclaude%3A%5CS%2B%29&replace=%241&label=claude%20image&color=2496ED&logo=docker)](https://github.com/orgs/united-software-platform/packages/container/package/claude)
+[![выпуск Claude Code в опубликованном образе](https://img.shields.io/endpoint?url=https%3A%2F%2Fraw.githubusercontent.com%2Funited-software-platform%2Fsdd-developer-kit%2Fbadges%2Fclaude.json)](https://github.com/orgs/united-software-platform/packages/container/package/sdd-developer-kit)
 [![версия Python из Dockerfile](https://img.shields.io/badge/dynamic/regex?url=https%3A%2F%2Fraw.githubusercontent.com%2Funited-software-platform%2Fsdd-developer-kit%2Fmain%2FDockerfile&search=ARG%20PYTHON_VERSION%3D%28%5B%5Cd.%5D%2B%29&replace=%241&label=python&color=3776AB&logo=python)](./Dockerfile)
-[![версия OpenSpec из Dockerfile](https://img.shields.io/badge/dynamic/regex?url=https%3A%2F%2Fraw.githubusercontent.com%2Funited-software-platform%2Fsdd-developer-kit%2Fmain%2FDockerfile&search=ARG%20OPENSPEC_VERSION%3D%28%5B%5Cd.%5D%2B%29&replace=%241&label=openspec&color=5B4FCF)](./Dockerfile)
+[![версия OpenSpec в опубликованном образе](https://img.shields.io/endpoint?url=https%3A%2F%2Fraw.githubusercontent.com%2Funited-software-platform%2Fsdd-developer-kit%2Fbadges%2Fopenspec.json)](https://github.com/Fission-AI/OpenSpec)
 [![версия uv из Dockerfile](https://img.shields.io/badge/dynamic/regex?url=https%3A%2F%2Fraw.githubusercontent.com%2Funited-software-platform%2Fsdd-developer-kit%2Fmain%2FDockerfile&search=ARG%20UV_VERSION%3D%28%5B%5Cd.%5D%2B%29&replace=%241&label=uv&color=DE5FE9)](./Dockerfile)
 [![версия kit'а из файла VERSION](https://img.shields.io/badge/dynamic/regex?url=https%3A%2F%2Fraw.githubusercontent.com%2Funited-software-platform%2Fsdd-developer-kit%2Fmain%2FVERSION&search=%28%5B%5Cd.%5D%2B%29&replace=v%241&label=version&color=007EC6)](./VERSION)
 [![лицензия MIT](https://img.shields.io/badge/license-MIT-007EC6)](./LICENSE)
@@ -57,8 +57,10 @@
 - Skills и команды SDD — `.claude/skills/`, `.claude/commands/`, `openspec/`: рабочие процессы
   `/opsx:*`, которые разворачивает `make init` вызовом `openspec init`.
 
-Версии инструментов показывают бейджи в начале файла; их значения берутся из
-[`Dockerfile`](./Dockerfile) и [`VERSION`](./VERSION) — там их можно прочитать и без бейджей.
+Версии инструментов показывают бейджи в начале файла. Версии Python и uv закреплены
+в [`Dockerfile`](./Dockerfile), версия набора — в [`VERSION`](./VERSION); выпуски Claude Code
+и OpenSpec разрешаются при сборке образа, и бейджи берут их из состава опубликованного образа —
+в исходниках репозитория этих значений нет.
 
 Пайплайны репозитория kit'а в состав набора не входят: в чужой проект попадает сама проверка,
 а не сценарий системы непрерывной интеграции, который её запускает, — сценарии целевой проект ведёт
@@ -238,29 +240,48 @@ kit'а на момент установки.
 | Свойство | Значение |
 |----------|----------|
 | Имя образа | `ghcr.io/united-software-platform/sdd-developer-kit` |
-| Теги | версия kit'а из [`VERSION`](./VERSION) и `latest` |
+| Теги | `latest`, версия kit'а из [`VERSION`](./VERSION), тег состава |
 | Архитектуры | `linux/amd64`, `linux/arm64` в одном мультиарх-образе |
-| Состав | см. [Состав набора](#состав-набора) |
+| Состав | см. [Состав набора](#состав-набора); версии — в блоке бейджей в начале файла |
 
-Закрепить версию образа в проекте можно в `.env`, не редактируя файлы поставки:
+Образ пересобирается, как только выходит новый выпуск Claude Code: репозиторий базового образа
+сообщает о публикации, и свежий выпуск доезжает до `latest` за время одной сборки. Суточное
+расписание остаётся страховкой — им же подхватываются новые выпуски OpenSpec. Пересборка
+с неизменившимся составом не публикуется: тег состава не должен обозначать то же самое дважды.
+
+Что означает каждый тег:
+
+- `latest` — свежий проверенный состав; значение по умолчанию в поставке и штатный способ
+  получения образа;
+- **версия kit'а** (`X.Y.Z`) — свежий состав, собранный на этой версии исходников набора. Тег
+  подвижный: каждая пересборка переставляет его на новый образ;
+- **тег состава** (`X.Y.Z-YYYYMMDD-hhmmss`, время публикации в UTC) — конкретная публикация.
+  Этот тег не перезаписывается, и по нему возвращаются к составу, работавшему раньше.
+
+Закрепить образ в проекте можно в `.env`, не редактируя файлы поставки:
 
 ```bash
-SDD_KIT_IMAGE_TAG=1.0.0
+SDD_KIT_IMAGE_TAG=X.Y.Z                 # версия набора, состав — свежий
+SDD_KIT_IMAGE_TAG=X.Y.Z-YYYYMMDD-hhmmss # конкретная публикация
+SDD_KIT_IMAGE_DIGEST=@sha256:…          # тот же самый образ побайтово
 ```
 
 Тем же способом подставляется собственная сборка — через `SDD_KIT_IMAGE`.
 
-Из какой версии kit'а собран уже загруженный образ, показывает его метка:
+> **Внимание:** тег версии набора побайтовой неизменности образа не гарантирует — он адресует
+> версию исходников, а не состав. Гарантию даёт только `SDD_KIT_IMAGE_DIGEST`; заданный digest
+> определяет образ независимо от тега.
+
+Что внутри загруженного образа, показывают его метки — запускать контейнер для этого не нужно:
 
 ```bash
 docker image inspect ghcr.io/united-software-platform/sdd-developer-kit:latest \
-    --format '{{index .Config.Labels "org.opencontainers.image.version"}}'
+    --format '{{json .Config.Labels}}'
 ```
 
-> **Внимание:** тег версии не гарантирует побайтовой неизменности образа. Образ пересобирается
-> и по расписанию, публикуя под тем же тегом обновлённый состав инструментов. Если нужен
-> гарантированно тот же самый образ, адресуйте его по digest — он дописывается к тегу:
-> `SDD_KIT_IMAGE_TAG=1.0.0@sha256:…`.
+Выпуск Claude Code лежит в `org.opencontainers.image.base.name`, выпуск утилиты OpenSpec —
+в `io.sdd-kit.openspec.version`, версия набора — в `org.opencontainers.image.version`. Те же
+два выпуска показывают бейджи в начале файла — по ним состав виден и до загрузки образа.
 
 > **Внимание:** первый запуск агента в проекте, где образ ещё не загружен, требует сетевого доступа
 > к реестру. Дальше сеть нужна только для обновления образа — см.
@@ -291,7 +312,8 @@ docker image inspect ghcr.io/united-software-platform/sdd-developer-kit:latest \
 | Переменная | Обязательность | Назначение |
 |------------|----------------|------------|
 | `SDD_KIT_IMAGE` | значение по умолчанию | Имя образа окружения агента; по умолчанию — опубликованный образ kit'а |
-| `SDD_KIT_IMAGE_TAG` | значение по умолчанию | Тег образа; по умолчанию `latest`, для закрепления версии — номер вида `1.0.0` |
+| `SDD_KIT_IMAGE_TAG` | значение по умолчанию | Тег образа; по умолчанию `latest`, для закрепления — версия набора или тег состава |
+| `SDD_KIT_IMAGE_DIGEST` | по необходимости | Закрепление образа по digest вместе с разделителем (`@sha256:…`); пусто — образ адресуется тегом |
 | `PROJECT_DIR` | значение по умолчанию | Путь монтирования рабочего дерева проекта внутри контейнера |
 | `CLAUDE_CONFIG_DIR` | значение по умолчанию | Каталог конфигурации Claude Code внутри контейнера |
 | `CLAUDE_ACCOUNTS_DIR` | значение по умолчанию | Каталог на хосте, где лежат профили аккаунтов |

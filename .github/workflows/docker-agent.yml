@@ -21,17 +21,33 @@ on:
       - Dockerfile
       - VERSION
       - .github/workflows/docker-agent.yml
+      - .github/scripts/registry.sh
   pull_request:
     paths:
       - Dockerfile
       - VERSION
       - .github/workflows/docker-agent.yml
-  # Состав образа зависит от внешних источников — базового образа claude:latest и npm-реестра, —
-  # и коммитами их обновления не сопровождаются. Расписание — единственный триггер, который их
-  # ловит. Время смещено от круглого часа: на нулевой минуте очередь раннеров перегружена.
+      - .github/scripts/registry.sh
+  # Публикация нового выпуска базового образа — основное событие пересборки: он выходит
+  # по нескольку раз в день, и ждать момента расписания значило бы не доставить пользователю
+  # ни один из промежуточных выпусков. Событие отправляет пайплайн репозитория базового образа
+  # после успешной публикации; полезная нагрузка несёт выпуск в поле version.
+  repository_dispatch:
+    types:
+      - base-image-published
+  # Расписание оставлено страховкой: событие может не прийти — пайплайн наверху не сработал
+  # или право на отправку отозвано, — и оно же остаётся единственным триггером для выпусков
+  # утилиты OpenSpec, приходящих из npm-реестра без всякого события.
+  # Время смещено от круглого часа: на нулевой минуте очередь раннеров перегружена.
   schedule:
     - cron: '17 3 * * *'
   workflow_dispatch:
+    inputs:
+      force:
+        description: Публиковать даже при неизменном составе (запуск релизным сценарием)
+        required: false
+        default: false
+        type: boolean
 
 # Сборка arm64 идёт через эмуляцию и занимает десятки минут; держать в очереди заведомо
 # устаревший прогон той же ссылки незачем.
@@ -46,6 +62,12 @@ env:
   # расхождение двух мест обнаруживает задание resolve и останавливает прогон.
   OPENSPEC_MAJOR: '1'
   OPENSPEC_PACKAGE: '@fission-ai/openspec'
+  # Репозиторий базового образа продублирован в строке FROM Dockerfile — расхождение двух мест
+  # тоже обнаруживает задание resolve.
+  BASE_IMAGE_REPO: united-software-platform/claude
+  # Служебная ветка носителя разрешённых версий: её читают бейджи README.md. Исходников
+  # в ней нет, в неё не сливают и из неё не ветвятся.
+  BADGE_BRANCH: badges
 
 jobs:
   # Параметры считаются один раз на прогон и передаются и в проверку, и в публикацию:
@@ -61,6 +83,12 @@ jobs:
       image: ${{ steps.params.outputs.image }}
       kit_version: ${{ steps.params.outputs.kit_version }}
       openspec_version: ${{ steps.params.outputs.openspec_version }}
+      sources_hash: ${{ steps.params.outputs.sources_hash }}
+      claude_version: ${{ steps.base.outputs.claude_version }}
+      claude_digest: ${{ steps.base.outputs.claude_digest }}
+      build_args: ${{ steps.build_spec.outputs.args }}
+      labels: ${{ steps.build_spec.outputs.labels }}
+      build: ${{ steps.freshness.outputs.build }}
 
     steps:
       - name: Получение репозитория
@@ -91,6 +119,13 @@ jobs:
                    echo "по умолчанию в Dockerfile ($default): приведите их к одному разряду." >&2
                    exit 1; }
 
+          # Репозиторий базового образа сверяется со строкой FROM по той же причине: пайплайн
+          # опрашивает реестр одного репозитория, а собирается образ из другого — молча.
+          from_repo=$(sed -n 's|^FROM ghcr\.io/\([^:]*\):.*|\1|p' Dockerfile | tail -n 1)
+          [ "$from_repo" = "$BASE_IMAGE_REPO" ] \
+              || { echo "репозиторий базового образа в пайплайне ($BASE_IMAGE_REPO) разошёлся" >&2
+                   echo "со строкой FROM в Dockerfile ($from_repo)." >&2; exit 1; }
+
           # Конкретная версия разрешается в пределах мажорной: полное закрепление сделало бы
           # плановую пересборку бессмысленной для главного инструмента kit'а.
           openspec_version=$(npm view "$OPENSPEC_PACKAGE@^$OPENSPEC_MAJOR" version \
@@ -98,19 +133,167 @@ jobs:
           printf '%s\n' "$openspec_version" | grep -Eq '^[0-9]+\.[0-9]+\.[0-9]+' \
               || { echo "версия OpenSpec не разрешилась: получено «$openspec_version»" >&2; exit 1; }
 
-          echo "image=$image" >> "$GITHUB_OUTPUT"
-          echo "kit_version=$kit_version" >> "$GITHUB_OUTPUT"
-          echo "openspec_version=$openspec_version" >> "$GITHUB_OUTPUT"
+          # Отпечаток исходника образа: им задание сверки отвечает на вопрос «правился ли
+          # исходник с прошлой публикации», не обращаясь к истории git. Отпечаток содержимого,
+          # а не SHA коммита: правка документации коммит меняет, а образ — нет.
+          sources_hash=$(cat Dockerfile .github/workflows/docker-agent.yml .github/scripts/registry.sh \
+              | sha256sum | cut -c1-16)
+
+          {
+              echo "image=$image"
+              echo "kit_version=$kit_version"
+              echo "openspec_version=$openspec_version"
+              echo "sources_hash=$sources_hash"
+          } >> "$GITHUB_OUTPUT"
 
           echo "Образ:            ghcr.io/$image"
           echo "Версия kit'а:     $kit_version"
           echo "Версия OpenSpec:  $openspec_version (граница ^$OPENSPEC_MAJOR)"
+          echo "Отпечаток сборки: $sources_hash"
+
+      # Выпуск базового образа разрешается до сборки: собранный по подвижному тегу образ
+      # не позволяет назвать выпуск, который в него попал, и делает неисполнимыми и сверку
+      # состава, и его запись в метки.
+      #
+      # Источник номера выпуска зависит от причины запуска, а digest во всех случаях читается
+      # из реестра по этому номеру: полезная нагрузка приходит из другого репозитория, и доверять
+      # ей адресацию образа незачем — она называет выпуск, а реестр подтверждает, что тег есть.
+      - name: Разрешение выпуска базового образа
+        id: base
+        env:
+          EVENT: ${{ github.event_name }}
+          PAYLOAD_VERSION: ${{ github.event.client_payload.version }}
+        run: |
+          if [ "$EVENT" = "repository_dispatch" ]; then
+              claude_version=$(printf '%s' "$PAYLOAD_VERSION" | tr -d ' \011\015\012')
+              origin="событие репозитория базового образа"
+              [ -n "$claude_version" ] \
+                  || { echo "событие не назвало выпуск базового образа в client_payload.version" >&2; exit 1; }
+          else
+              claude_version=$(sh .github/scripts/registry.sh label \
+                  "$BASE_IMAGE_REPO" latest org.opencontainers.image.version)
+              origin="опрос реестра по тегу latest"
+          fi
+
+          printf '%s\n' "$claude_version" | grep -Eq '^[0-9]+\.[0-9]+\.[0-9]+$' \
+              || { echo "выпуск базового образа не разрешился: получено «$claude_version»" >&2; exit 1; }
+
+          claude_digest=$(sh .github/scripts/registry.sh digest "$BASE_IMAGE_REPO" "$claude_version") \
+              || { echo "в реестре нет базового образа с тегом $claude_version" >&2; exit 1; }
+
+          {
+              echo "claude_version=$claude_version"
+              echo "claude_digest=$claude_digest"
+          } >> "$GITHUB_OUTPUT"
+
+          echo "Базовый образ:    ghcr.io/$BASE_IMAGE_REPO:$claude_version ($origin)"
+          echo "Digest:           $claude_digest"
+
+      # Аргументы и метки собираются один раз и передаются обоим заданиям целиком: два списка,
+      # которые обязаны совпадать, рано или поздно расходятся, и тогда проверено одно,
+      # а опубликовано другое.
+      #
+      # Описательные метки перекрывают унаследованные от базового образа: без этого образ
+      # представляется в реестре именем claude и описанием другого продукта.
+      - name: Аргументы и метки сборки
+        id: build_spec
+        env:
+          REPOSITORY: ${{ github.repository }}
+          KIT_VERSION: ${{ steps.params.outputs.kit_version }}
+          OPENSPEC_VERSION: ${{ steps.params.outputs.openspec_version }}
+          SOURCES_HASH: ${{ steps.params.outputs.sources_hash }}
+          CLAUDE_VERSION: ${{ steps.base.outputs.claude_version }}
+          CLAUDE_DIGEST: ${{ steps.base.outputs.claude_digest }}
+          REVISION: ${{ github.sha }}
+        run: |
+          {
+              echo 'args<<ARGS_EOF'
+              echo "CLAUDE_VERSION=$CLAUDE_VERSION"
+              echo "OPENSPEC_VERSION=$OPENSPEC_VERSION"
+              echo 'ARGS_EOF'
+
+              echo 'labels<<LABELS_EOF'
+              echo "org.opencontainers.image.title=SDD Developer Kit"
+              echo "org.opencontainers.image.description=Окружение агента SDD Developer Kit: Claude Code, утилита OpenSpec, Python и uv в одном контейнере"
+              echo "org.opencontainers.image.url=https://github.com/$REPOSITORY"
+              echo "org.opencontainers.image.source=https://github.com/$REPOSITORY"
+              echo "org.opencontainers.image.version=$KIT_VERSION"
+              echo "org.opencontainers.image.revision=$REVISION"
+              echo "org.opencontainers.image.base.name=ghcr.io/$BASE_IMAGE_REPO:$CLAUDE_VERSION"
+              echo "org.opencontainers.image.base.digest=$CLAUDE_DIGEST"
+              echo "io.sdd-kit.openspec.version=$OPENSPEC_VERSION"
+              echo "io.sdd-kit.image.sources=$SOURCES_HASH"
+              echo 'LABELS_EOF'
+          } >> "$GITHUB_OUTPUT"
+
+      # Сверка состава до сборки, а не до публикации: пустой прогон стоит десятки минут
+      # эмуляции arm64, и экономить имеет смысл именно их.
+      #
+      # Состав читается метками уже опубликованного latest — второго носителя того же факта
+      # в репозитории нет и не заводится: реестр и так знает, что в нём лежит.
+      - name: Сверка с составом опубликованного образа
+        id: freshness
+        env:
+          IMAGE: ${{ steps.params.outputs.image }}
+          KIT_VERSION: ${{ steps.params.outputs.kit_version }}
+          OPENSPEC_VERSION: ${{ steps.params.outputs.openspec_version }}
+          SOURCES_HASH: ${{ steps.params.outputs.sources_hash }}
+          CLAUDE_VERSION: ${{ steps.base.outputs.claude_version }}
+          EVENT: ${{ github.event_name }}
+          FORCE: ${{ inputs.force }}
+        run: |
+          # Правка исходника и запрос на слияние собираются всегда: сверять состав незачем —
+          # изменился сам образ. Запуск релизным сценарием публикует независимо от состава:
+          # тег новой версии обязан появиться в реестре.
+          case "$EVENT" in
+              push|pull_request)
+                  echo "build=true" >> "$GITHUB_OUTPUT"
+                  echo "Сборка выполняется: изменён исходник образа или файл версии."
+                  exit 0 ;;
+          esac
+          if [ "$FORCE" = "true" ]; then
+              echo "build=true" >> "$GITHUB_OUTPUT"
+              echo "Сборка выполняется: запуск с публикацией независимо от состава (релиз)."
+              exit 0
+          fi
+
+          published=$(sh .github/scripts/registry.sh labels "$IMAGE" latest) && rc=0 || rc=$?
+          if [ "$rc" = "4" ]; then
+              echo "build=true" >> "$GITHUB_OUTPUT"
+              echo "Сборка выполняется: образа latest в реестре ещё нет."
+              exit 0
+          fi
+          [ "$rc" = "0" ] || exit "$rc"
+
+          label() { printf '%s' "$published" | jq -r --arg n "$1" '.[$n] // ""'; }
+
+          was_claude=$(label org.opencontainers.image.base.name)
+          was_openspec=$(label io.sdd-kit.openspec.version)
+          was_sources=$(label io.sdd-kit.image.sources)
+          was_kit=$(label org.opencontainers.image.version)
+
+          now_claude="ghcr.io/$BASE_IMAGE_REPO:$CLAUDE_VERSION"
+
+          echo "Состав опубликованного: claude=$was_claude openspec=$was_openspec kit=$was_kit sources=$was_sources"
+          echo "Состав разрешённый:     claude=$now_claude openspec=$OPENSPEC_VERSION kit=$KIT_VERSION sources=$SOURCES_HASH"
+
+          if [ "$was_claude" = "$now_claude" ] \
+              && [ "$was_openspec" = "$OPENSPEC_VERSION" ] \
+              && [ "$was_sources" = "$SOURCES_HASH" ] \
+              && [ "$was_kit" = "$KIT_VERSION" ]; then
+              echo "build=false" >> "$GITHUB_OUTPUT"
+              echo "Сборка не выполняется: состав не изменился с прошлой публикации."
+          else
+              echo "build=true" >> "$GITHUB_OUTPUT"
+              echo "Сборка выполняется: состав изменился."
+          fi
 
   # Проверка запуском — условие публикации. Задания матрицы независимы: медленная
   # эмулированная сборка arm64 не задерживает amd64.
   check:
     name: Проверка образа (${{ matrix.platform }})
     needs: resolve
+    if: needs.resolve.outputs.build == 'true'
     runs-on: ubuntu-latest
 
     permissions:
@@ -137,39 +320,36 @@ jobs:
       # Образ грузится в локальный демон: без этого его нечем запустить. Кэш слоёв разделён
       # по архитектурам и переиспользуется заданием публикации.
       #
-      # Метки проставляются и здесь, и при публикации одним и тем же списком: тег — носитель
-      # внешний, он остаётся в реестре и загруженный образ не сопровождает, а метка едет вместе
-      # с образом и отвечает на вопрос, из какой версии kit'а он собран. Проставить их только
-      # при публикации значило бы проверять образ без меток, а публиковать с метками.
+      # Метки проставляются и здесь, и при публикации одним и тем же списком задания resolve:
+      # тег — носитель внешний, он остаётся в реестре и загруженный образ не сопровождает,
+      # а метка едет вместе с образом и отвечает на вопрос, что у него внутри. Проставить их
+      # только при публикации значило бы проверять образ без меток, а публиковать с метками.
       - name: Сборка под одну архитектуру
         uses: docker/build-push-action@v6
         with:
           context: .
           platforms: ${{ matrix.platform }}
-          build-args: |
-            OPENSPEC_VERSION=${{ needs.resolve.outputs.openspec_version }}
-          labels: |
-            org.opencontainers.image.version=${{ needs.resolve.outputs.kit_version }}
-            org.opencontainers.image.revision=${{ github.sha }}
-            org.opencontainers.image.source=https://github.com/${{ github.repository }}
+          build-args: ${{ needs.resolve.outputs.build_args }}
+          labels: ${{ needs.resolve.outputs.labels }}
           load: true
           tags: sdd-developer-kit:check
           cache-from: type=gha,scope=${{ matrix.platform }}
           cache-to: type=gha,mode=max,scope=${{ matrix.platform }}
 
       # Инструменты запускаются от пользователя образа, а не от root: именно так их будет
-      # вызывать агент, и права на файлы интерпретатора проверяются заодно. Версия OpenSpec
-      # сверяется с рассчитанной: плановая пересборка идёт без участия человека, и образ
-      # с неожиданным составом иначе попал бы в реестр под тем же тегом, что и рабочий.
+      # вызывать агент, и права на файлы интерпретатора проверяются заодно. Версии сверяются
+      # с рассчитанными: плановая пересборка идёт без участия человека, и образ с неожиданным
+      # составом иначе попал бы в реестр под тем же тегом, что и рабочий.
       - name: Запуск инструментов образа
         env:
           PLATFORM: ${{ matrix.platform }}
           EXPECTED_OPENSPEC: ${{ needs.resolve.outputs.openspec_version }}
-          EXPECTED_KIT: ${{ needs.resolve.outputs.kit_version }}
+          EXPECTED_CLAUDE: ${{ needs.resolve.outputs.claude_version }}
         run: |
           run() { docker run --rm --platform "$PLATFORM" sdd-developer-kit:check "$@"; }
 
           echo "== id =="            && run id
+          echo "== claude =="        && run claude --version
           echo "== git =="           && run git --version
           echo "== openspec =="      && run openspec --version
           echo "== python3 =="       && run python3 --version
@@ -184,13 +364,69 @@ jobs:
               || { echo "версия OpenSpec в образе ($actual) разошлась с рассчитанной ($EXPECTED_OPENSPEC)" >&2
                    exit 1; }
 
-          # Метка читается у образа, а не у манифеста в реестре: второй носитель версии
-          # обязан совпадать с рассчитанным до публикации, иначе он молча разойдётся с тегом.
-          label=$(docker image inspect sdd-developer-kit:check \
-              --format '{{index .Config.Labels "org.opencontainers.image.version"}}')
-          [ "$label" = "$EXPECTED_KIT" ] \
-              || { echo "метка версии kit'а в образе ($label) разошлась с рассчитанной ($EXPECTED_KIT)" >&2
+          actual=$(run claude --version | grep -Eo '[0-9]+\.[0-9]+\.[0-9]+' | head -n 1)
+          [ "$actual" = "$EXPECTED_CLAUDE" ] \
+              || { echo "выпуск Claude Code в образе ($actual) разошёлся с разрешённым ($EXPECTED_CLAUDE)" >&2
                    exit 1; }
+
+      # Метки читаются у образа, а не у манифеста в реестре: они — второй носитель состава
+      # и обязаны совпадать с рассчитанным до публикации, иначе разойдутся с ним молча.
+      - name: Сверка меток состава
+        env:
+          EXPECTED_KIT: ${{ needs.resolve.outputs.kit_version }}
+          EXPECTED_OPENSPEC: ${{ needs.resolve.outputs.openspec_version }}
+          EXPECTED_BASE: ghcr.io/${{ env.BASE_IMAGE_REPO }}:${{ needs.resolve.outputs.claude_version }}
+          EXPECTED_BASE_DIGEST: ${{ needs.resolve.outputs.claude_digest }}
+        run: |
+          label() {
+              docker image inspect sdd-developer-kit:check \
+                  --format "{{index .Config.Labels \"$1\"}}"
+          }
+          expect() {
+              actual=$(label "$1")
+              [ "$actual" = "$2" ] \
+                  || { echo "метка $1 в образе («$actual») разошлась с рассчитанной («$2»)" >&2; exit 1; }
+              echo "$1 = $actual"
+          }
+
+          expect org.opencontainers.image.version          "$EXPECTED_KIT"
+          expect io.sdd-kit.openspec.version               "$EXPECTED_OPENSPEC"
+          expect org.opencontainers.image.base.name        "$EXPECTED_BASE"
+          expect org.opencontainers.image.base.digest      "$EXPECTED_BASE_DIGEST"
+
+          title=$(label org.opencontainers.image.title)
+          [ "$title" != "claude" ] \
+              || { echo "описательные метки унаследованы от базового образа: title = $title" >&2; exit 1; }
+
+      # Проверка совместимости утилиты: сверка номера версии не отличает выпуск, перестающий
+      # понимать уже созданные артефакты, от совместимого, а утилита обновляется в пределах
+      # мажорного разряда без участия человека.
+      #
+      # Корпус — артефакты самого репозитория: другого у пайплайна нет. Ограничение зафиксировано
+      # явно — он не покрывает всех форм артефактов пользователей, и проверка остаётся фильтром,
+      # а не гарантией совместимости.
+      - name: Совместимость утилиты OpenSpec с артефактами
+        env:
+          PLATFORM: ${{ matrix.platform }}
+          OPENSPEC_VERSION: ${{ needs.resolve.outputs.openspec_version }}
+        run: |
+          work() {
+              docker run --rm --platform "$PLATFORM" \
+                  --volume "$PWD:/work:ro" --workdir /work sdd-developer-kit:check "$@"
+          }
+          fail() {
+              echo "утилита OpenSpec $OPENSPEC_VERSION не понимает артефакты репозитория: $1" >&2
+              echo "публикация остановлена — в реестре остаётся предыдущий образ." >&2
+              exit 1
+          }
+
+          echo "== перечень спецификаций =="
+          work openspec list --specs --json   || fail "openspec list --specs не разобрал openspec/specs"
+          echo "== перечень изменений =="
+          work openspec list --changes --json || fail "openspec list --changes не разобрал openspec/changes"
+          echo "== строгая валидация =="
+          work openspec validate --all --strict --no-interactive \
+              || fail "openspec validate --all --strict признал артефакты некорректными"
 
   # Публикация выполняется только после успешной проверки обеих архитектур и не выполняется
   # для запроса на слияние: запрос из форка не должен получать запись в реестр организации.
@@ -199,12 +435,14 @@ jobs:
     needs:
       - resolve
       - check
-    if: github.event_name != 'pull_request'
+    if: needs.resolve.outputs.build == 'true' && github.event_name != 'pull_request'
     runs-on: ubuntu-latest
 
     # Право записи в реестр объявлено только здесь: заданиям расчёта и проверки оно не нужно.
+    # Право записи в репозиторий — для носителя разрешённых версий: шаг записи коммитит
+    # в служебную ветку badges. Уже меньшей области, чем задание, права не имеют.
     permissions:
-      contents: read
+      contents: write
       packages: write
 
     steps:
@@ -228,6 +466,11 @@ jobs:
 
       # Тег latest проставляется только из основной ветки: сборка из другой ссылки не должна
       # подменять образ, который получают все установленные проекты.
+      #
+      # Тег состава существует ради возврата к работавшему составу: тег версии переставляет
+      # каждая пересборка, и закрепиться на нём нельзя. Момент публикации в UTC делает тег
+      # уникальным и упорядоченным по времени, а префикс версии связывает состав с исходниками,
+      # на которых он собран.
       - name: Теги образа
         id: tags
         env:
@@ -235,25 +478,25 @@ jobs:
           KIT_VERSION: ${{ needs.resolve.outputs.kit_version }}
           IS_MAIN: ${{ github.ref == 'refs/heads/main' }}
         run: |
-          tags="$IMAGE:$KIT_VERSION"
+          build_tag="$KIT_VERSION-$(date -u +%Y%m%d-%H%M%S)"
+          tags="$IMAGE:$KIT_VERSION,$IMAGE:$build_tag"
           [ "$IS_MAIN" = "true" ] && tags="$tags,$IMAGE:latest"
-          echo "list=$tags" >> "$GITHUB_OUTPUT"
+          {
+              echo "list=$tags"
+              echo "build_tag=$build_tag"
+          } >> "$GITHUB_OUTPUT"
           echo "Теги публикации: $tags"
 
       # Слои берутся из кэша заданий проверки, поэтому публикуется ровно то, что проверено,
-      # и повторной сборки не происходит. Список меток совпадает со списком задания проверки —
-      # расхождение означало бы, что проверено не то, что опубликовано.
+      # и повторной сборки не происходит. Аргументы и метки — те же значения задания resolve,
+      # что и при проверке: расхождение означало бы, что проверено не то, что опубликовано.
       - name: Сборка и публикация мультиарх-образа
         uses: docker/build-push-action@v6
         with:
           context: .
           platforms: linux/amd64,linux/arm64
-          build-args: |
-            OPENSPEC_VERSION=${{ needs.resolve.outputs.openspec_version }}
-          labels: |
-            org.opencontainers.image.version=${{ needs.resolve.outputs.kit_version }}
-            org.opencontainers.image.revision=${{ github.sha }}
-            org.opencontainers.image.source=https://github.com/${{ github.repository }}
+          build-args: ${{ needs.resolve.outputs.build_args }}
+          labels: ${{ needs.resolve.outputs.labels }}
           push: true
           tags: ${{ steps.tags.outputs.list }}
           cache-from: |
@@ -265,5 +508,63 @@ jobs:
       - name: Состав опубликованного манифеста
         env:
           IMAGE: ghcr.io/${{ needs.resolve.outputs.image }}
-          KIT_VERSION: ${{ needs.resolve.outputs.kit_version }}
-        run: docker buildx imagetools inspect "$IMAGE:$KIT_VERSION"
+          BUILD_TAG: ${{ steps.tags.outputs.build_tag }}
+        run: docker buildx imagetools inspect "$IMAGE:$BUILD_TAG"
+
+      # Носитель разрешённых версий для бейджей README.md. Реестр их уже знает, но бейдж
+      # прочитать его не может: метки доступны только после получения токена, пусть и анонимного,
+      # а shields.io делает один запрос без аутентификации. Отсюда JSON в служебной ветке.
+      #
+      # Шаг стоит после публикации: носитель описывает опубликованный образ, и запись до неё
+      # оставила бы в нём состав, которого в реестре нет. Обратный порядок расхождения
+      # не исключает — прогон может упасть между шагами, — и оно устраняется следующей пересборкой.
+      #
+      # Коммит машинный, его основание — GIT-022: заголовок «Состав образа <тег состава>»,
+      # изменяются только файлы носителя, ветка служебная.
+      - name: Запись разрешённых версий для бейджей
+        if: github.ref == 'refs/heads/main'
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          REPOSITORY: ${{ github.repository }}
+          CLAUDE_VERSION: ${{ needs.resolve.outputs.claude_version }}
+          OPENSPEC_VERSION: ${{ needs.resolve.outputs.openspec_version }}
+          BUILD_TAG: ${{ steps.tags.outputs.build_tag }}
+        run: |
+          work=$(mktemp -d)
+          origin="https://x-access-token:$GH_TOKEN@github.com/$REPOSITORY.git"
+
+          # Ветка создаётся сиротой при первой записи: отдельного шага подготовки нет,
+          # иначе восстановление удалённой ветки требовало бы участия человека.
+          if git clone --quiet --depth 1 --branch "$BADGE_BRANCH" "$origin" "$work" 2>/dev/null; then
+              echo "Служебная ветка $BADGE_BRANCH получена."
+          else
+              git clone --quiet --depth 1 "$origin" "$work"
+              git -C "$work" checkout --quiet --orphan "$BADGE_BRANCH"
+              # В клоне отслеживаются файлы основной ветки — в служебной ветке их быть не должно.
+              [ -z "$(git -C "$work" ls-files)" ] || git -C "$work" rm --quiet -rf .
+              echo "Служебная ветка $BADGE_BRANCH создаётся впервые."
+          fi
+
+          # Формат endpoint сервиса бейджей: подпись, значение и оформление задаёт носитель,
+          # а README.md ссылается на него и версий в себе не хранит.
+          badge() {
+              # Последний аргумент печатается через %b: необязательное поле приходит вместе
+              # с разделителем строк, а в %s управляющая последовательность осталась бы текстом.
+              printf '{\n  "schemaVersion": 1,\n  "label": "%s",\n  "message": "%s",\n  "color": "%s"%b\n}\n' \
+                  "$1" "$2" "$3" "$4" > "$work/$5"
+          }
+          badge "claude image" "$CLAUDE_VERSION" "2496ED" ',\n  "namedLogo": "docker"' claude.json
+          badge "openspec"     "$OPENSPEC_VERSION" "5B4FCF" "" openspec.json
+
+          git -C "$work" config user.name "github-actions[bot]"
+          git -C "$work" config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+          git -C "$work" add claude.json openspec.json
+          if git -C "$work" diff --cached --quiet; then
+              echo "Состав носителя не изменился — коммит не создаётся."
+              exit 0
+          fi
+          git -C "$work" commit --quiet \
+              -m "Состав образа $BUILD_TAG" \
+              -m "Claude Code $CLAUDE_VERSION, утилита OpenSpec $OPENSPEC_VERSION."
+          git -C "$work" push --quiet origin "$BADGE_BRANCH"
+          echo "Носитель обновлён: claude $CLAUDE_VERSION, openspec $OPENSPEC_VERSION."
