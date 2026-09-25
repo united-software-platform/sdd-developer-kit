@@ -48,20 +48,20 @@ jobs:
       - name: Значения по умолчанию
         run: |
           cp .env.example .env
-          docker compose config | grep 'image:'
+          docker compose --profile claude config | grep 'image:'
           docker compose run --rm claude id
 
       - name: Тег версии и тег состава
         run: |
-          SDD_KIT_IMAGE_TAG=1.4.1 docker compose config | grep 'image:'
+          SDD_KIT_IMAGE_TAG=1.4.1 docker compose --profile claude config | grep 'image:'
           SDD_KIT_IMAGE_TAG=1.4.1 docker compose run --rm claude claude --version
-          SDD_KIT_IMAGE_TAG=1.4.1-20260925-120000 docker compose config | grep 'image:'
+          SDD_KIT_IMAGE_TAG=1.4.1-20260925-120000 docker compose --profile claude config | grep 'image:'
 
       - name: Адресация по digest
         run: |
           digest=$(sh .github/scripts/registry.sh digest "$KIT_IMAGE_REPO" latest)
           export SDD_KIT_IMAGE_DIGEST="@$digest"
-          docker compose config | grep 'image:'
+          docker compose --profile claude config | grep 'image:'
           docker compose run --rm claude id
 
       - name: Установка в чистый проект
@@ -69,5 +69,5 @@ jobs:
           mkdir -p /tmp/clean && cd /tmp/clean && git init -q .
           sh "$GITHUB_WORKSPACE/install.sh" --source "$GITHUB_WORKSPACE" -y
           cp .env.example .env
-          docker compose config | grep 'image:'
+          docker compose --profile claude config | grep 'image:'
           docker compose run --rm claude openspec --version
