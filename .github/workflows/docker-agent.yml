@@ -239,6 +239,7 @@ jobs:
           OPENSPEC_VERSION: ${{ steps.params.outputs.openspec_version }}
           SOURCES_HASH: ${{ steps.params.outputs.sources_hash }}
           CLAUDE_VERSION: ${{ steps.base.outputs.claude_version }}
+          CLAUDE_DIGEST: ${{ steps.base.outputs.claude_digest }}
           EVENT: ${{ github.event_name }}
           FORCE: ${{ inputs.force }}
         run: |
@@ -268,6 +269,7 @@ jobs:
           label() { printf '%s' "$published" | jq -r --arg n "$1" '.[$n] // ""'; }
 
           was_claude=$(label org.opencontainers.image.base.name)
+          was_digest=$(label org.opencontainers.image.base.digest)
           was_openspec=$(label io.sdd-kit.openspec.version)
           was_sources=$(label io.sdd-kit.image.sources)
           was_kit=$(label org.opencontainers.image.version)
@@ -275,9 +277,15 @@ jobs:
           now_claude="ghcr.io/$BASE_IMAGE_REPO:$CLAUDE_VERSION"
 
           echo "Состав опубликованного: claude=$was_claude openspec=$was_openspec kit=$was_kit sources=$was_sources"
+          echo "                        base.digest=$was_digest"
           echo "Состав разрешённый:     claude=$now_claude openspec=$OPENSPEC_VERSION kit=$KIT_VERSION sources=$SOURCES_HASH"
+          echo "                        base.digest=$CLAUDE_DIGEST"
 
+          # Digest сравнивается наравне с выпуском: базовый образ пересобирают и без смены выпуска
+          # Claude Code — обновлениями пакетов его собственной основы, — и по одному лишь тегу такая
+          # пересборка до пользователя не доехала бы до следующей смены выпуска.
           if [ "$was_claude" = "$now_claude" ] \
+              && [ "$was_digest" = "$CLAUDE_DIGEST" ] \
               && [ "$was_openspec" = "$OPENSPEC_VERSION" ] \
               && [ "$was_sources" = "$SOURCES_HASH" ] \
               && [ "$was_kit" = "$KIT_VERSION" ]; then
