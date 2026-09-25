@@ -221,7 +221,7 @@ jobs:
               echo "org.opencontainers.image.revision=$REVISION"
               echo "org.opencontainers.image.base.name=ghcr.io/$BASE_IMAGE_REPO:$CLAUDE_VERSION"
               echo "org.opencontainers.image.base.digest=$CLAUDE_DIGEST"
-              echo "io.sdd-kit.openspec.version=0.0.0"   # НАМЕРЕННОЕ РАСХОЖДЕНИЕ, проверка 1.6
+              echo "io.sdd-kit.openspec.version=$OPENSPEC_VERSION"
               echo "io.sdd-kit.image.sources=$SOURCES_HASH"
               echo 'LABELS_EOF'
           } >> "$GITHUB_OUTPUT"
