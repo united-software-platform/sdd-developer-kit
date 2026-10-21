@@ -1,7 +1,7 @@
 ## Context
 
 Мотивация описана в `proposal.md`, раздел Why. Отчёт аудита, от которого идёт правка, —
-[`archive/2026-10-21-add-project-docs-genre/audit/kit.md`](../archive/2026-10-21-add-project-docs-genre/audit/kit.md).
+[`archive/2026-10-21-add-project-docs-genre/audit/kit.md`](../2026-10-21-add-project-docs-genre/audit/kit.md).
 
 Положение на момент изменения:
 

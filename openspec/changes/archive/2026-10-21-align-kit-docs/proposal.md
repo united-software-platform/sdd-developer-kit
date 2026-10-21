@@ -1,7 +1,7 @@
 ## Why
 
 Аудит по норме документов проекта (`DGN-001`..`DGN-012`) нашёл, что документы kit'а ей не следуют. Подробности — в отчёте
-[`archive/2026-10-21-add-project-docs-genre/audit/kit.md`](../archive/2026-10-21-add-project-docs-genre/audit/kit.md):
+[`archive/2026-10-21-add-project-docs-genre/audit/kit.md`](../2026-10-21-add-project-docs-genre/audit/kit.md):
 
 - документа кейсов нет;
 - `README.md` ведёт путь пользователя жирными абзацами, а после него идут семь справочных разделов;
